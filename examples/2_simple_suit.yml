@@ -1,0 +1,28 @@
+name: Simple Test 2
+cases:
+
+- script: >
+    docker run -d --name test-server --volume $(pwd):$(pwd) --workdir $(pwd) --privileged quay.io/sbeliakou/ansible-training:centos
+
+- case: Should finish successfully
+  script: |
+    run docker exec test-server bash ./create_user.sh test-user
+    assert_success
+
+- case: Should create "test-user"
+  script: |
+    run docker exec test-server id test-user
+    assert_success
+
+# Obviously, it shouldn't, but let's check
+- case: Should create "unwilling-user"
+  script: |
+    run docker exec test-server id unwilling-user
+    assert_success
+
+- case: Shouldn't create "unwilling-user"
+  script: |
+    run docker exec test-server id unwilling-user
+    assert_failure
+
+- script: docker rm -f test-server

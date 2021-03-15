@@ -1,0 +1,12 @@
+name: Simple Test
+cases:
+- case: "Check if '/tmp/dir1' created"
+  script: |
+    [ -d /tmp/dir1 ]
+
+- case: "Check if '/opt' created"
+  script: |
+    [ -d /opt ]
+
+- case: "Check if 'user1' exists"
+  script: id user1
