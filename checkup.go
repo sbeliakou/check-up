@@ -515,11 +515,13 @@ func main() {
 	v3 := flag.Bool("v3", false, "Verbosity Mode 2")
 
 	flag.Usage = func() {
-		fmt.Fprintf(os.Stderr, "Custom help %s:\n", os.Args[0])
+		fmt.Fprintf(os.Stderr, "\nUsage: ./checkup [Options]\n\nOptions:\n")
 
 		flag.VisitAll(func(f *flag.Flag) {
-			fmt.Fprintf(os.Stderr, "    %v\n", f.Usage) // f.Name, f.Value
+			fmt.Fprintf(os.Stderr, "   -%-5s  %v\n", f.Name, f.Usage) // f.Name, f.Value
 		})
+
+		fmt.Fprintf(os.Stderr, "\nMore Deetails: https://github.com/sbeliakou/check-up/\n\n")
 	}
 
 	flag.Parse()
