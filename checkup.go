@@ -26,8 +26,8 @@ var workdir string = ""
 func print(msg string) {
 	if os.Getenv("TERM") == "" {
 		mod := regexp.MustCompile(`\033[^m]*m`).ReplaceAllString(msg, "")
-		mod  = regexp.MustCompile(`✓`).ReplaceAllString(mod, "ok")
-		mod  = regexp.MustCompile(`✗`).ReplaceAllString(mod, "NO")
+		mod = regexp.MustCompile(`✓`).ReplaceAllString(mod, "ok")
+		mod = regexp.MustCompile(`✗`).ReplaceAllString(mod, "NO")
 		log.Println(mod)
 	} else {
 		log.Println(msg)
@@ -50,14 +50,14 @@ type ScenarioItem struct {
 	Log         string            `yaml:"log"`
 	Fatal       bool              `yaml:"fatal"`
 	Debug       string            `yaml:"debug"`
-	Before			[]string					`yaml:"before"`
-	After		  	[]string					`yaml:"after"`
+	Before      []string          `yaml:"before"`
+	After       []string          `yaml:"after"`
 
 	// Runtime data
-	Status      string
-	Result      error
-	Stdout      string
-	Duration		string
+	Status   string
+	Result   error
+	Stdout   string
+	Duration string
 }
 
 func (s *ScenarioItem) IsSuccessful() bool {
@@ -119,16 +119,16 @@ type suitConfig struct {
 	Name  string         `yaml:"name"`
 	Cases []ScenarioItem `yaml:"cases"`
 
-	filter    string
+	filter string
 
 	startTime time.Time
 	endTime   time.Time
 
 	all         int
 	successfull int
-	failed     int
+	failed      int
 	score       float64
-	duration string
+	duration    string
 }
 
 func (c *suitConfig) getScenarioIds() []int {
@@ -146,7 +146,7 @@ func (c *suitConfig) getScenarioIds() []int {
 				if strings.Contains(c.Cases[i].Case, c.filter) {
 					result = append(result, i)
 				}
-			}  else {
+			} else {
 				result = append(result, i)
 			}
 		}
@@ -175,7 +175,7 @@ func (c *suitConfig) getIdByName(name string) int {
 
 func (c *suitConfig) printHeader() {
 	scenariosCount := c.getScenarioCount()
-	
+
 	c.startTime = time.Now()
 
 	if scenariosCount > 1 {
@@ -187,7 +187,7 @@ func (c *suitConfig) printHeader() {
 		log.Printf("%s, 1 test\n", c.Name)
 		return
 	}
-	
+
 	if scenariosCount == 0 {
 		log.Printf("%s, no tests to run\n", c.Name)
 		return
@@ -218,7 +218,7 @@ func (c *suitConfig) signOff() {
 	c.successfull = all - failed
 	c.failed = failed
 	c.all = all
-	c.score = 100*float64(sum)/float64(max)
+	c.score = 100 * float64(sum) / float64(max)
 	c.duration = duration(c.startTime, c.endTime)
 }
 
@@ -480,7 +480,7 @@ func main() {
 			c.exec(id)
 			if c.Cases[id].CanShow() {
 				c.printTestStatus(id, i)
-				i ++	
+				i++
 			}
 		}
 		print("-----------------------------------------------------------------------------------")
