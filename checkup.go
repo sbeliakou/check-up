@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"flag"
 	"fmt"
 	"io"
@@ -10,6 +11,7 @@ import (
 	"os"
 	"os/exec"
 	"regexp"
+	"strconv"
 	"strings"
 	"text/template"
 	"time"
@@ -58,6 +60,9 @@ type ScenarioItem struct {
 	Result   error
 	Stdout   string
 	Duration string
+
+	canShow bool
+	canRun  bool
 }
 
 func (s *ScenarioItem) IsSuccessful() bool {
@@ -69,7 +74,8 @@ func (s *ScenarioItem) IsFailed() bool {
 }
 
 func (s *ScenarioItem) CanShow() bool {
-	return s.Case != ""
+	// return s.Case != ""
+	return s.canShow
 }
 
 func (s *ScenarioItem) RunBash() ([]byte, error) {
@@ -139,16 +145,8 @@ func (c *suitConfig) getScenarioIds() []int {
 			continue
 		}
 
-		// will run only items with "case" field or without "case"/"name"
-		// apply filter to items with "case"
-		if c.Cases[i].Name == "" {
-			if c.filter != "" {
-				if strings.Contains(c.Cases[i].Case, c.filter) {
-					result = append(result, i)
-				}
-			} else {
-				result = append(result, i)
-			}
+		if c.Cases[i].canShow || c.Cases[i].canRun {
+			result = append(result, i)
 		}
 	}
 	return result
@@ -179,17 +177,17 @@ func (c *suitConfig) printHeader() {
 	c.startTime = time.Now()
 
 	if scenariosCount > 1 {
-		log.Printf("%s, 1..%d tests\n", c.Name, scenariosCount)
+		log.Printf("[ %s ], 1..%d tests\n", c.Name, scenariosCount)
 		return
 	}
 
 	if scenariosCount == 1 {
-		log.Printf("%s, 1 test\n", c.Name)
+		log.Printf("[ %s ], 1 test\n", c.Name)
 		return
 	}
 
 	if scenariosCount == 0 {
-		log.Printf("%s, no tests to run\n", c.Name)
+		log.Printf("[ %s ], no tests to run\n", c.Name)
 		return
 	}
 }
@@ -307,7 +305,7 @@ func (c *suitConfig) exec(item int) {
 	}
 }
 
-func (t *suitConfig) getConf(config string) *suitConfig {
+func (t *suitConfig) getConf(config string, taskFilter ...string) *suitConfig {
 	yamlFile, err := ioutil.ReadFile(config)
 
 	if err != nil {
@@ -341,6 +339,22 @@ func (t *suitConfig) getConf(config string) *suitConfig {
 			}
 		}
 
+		if (*t).Cases[i].Case != "" {
+			if len(taskFilter) > 0 {
+				if strings.Contains((*t).Cases[i].Case, taskFilter[0]) {
+					(*t).Cases[i].canShow = true
+					(*t).Cases[i].canRun = true
+				}
+			} else {
+				(*t).Cases[i].canShow = true
+				(*t).Cases[i].canRun = true
+			}
+		}
+
+		if (*t).Cases[i].Name == "" {
+			(*t).Cases[i].canRun = true
+		}
+
 		// if (*t).Cases[i].Log != "" {
 		// 	logging := (*t).Cases[i].Log
 		// 	if logging == "True" || logging == "true" || logging == "Yes" || logging == "yes" {
@@ -372,8 +386,24 @@ func duration(start time.Time, finish time.Time) string {
 	return finish.Sub(start).Truncate(time.Millisecond).String()
 }
 
+type reportFile struct {
+	fileName string
+	format   string
+}
+
+func (r *reportFile) parse(d string) {
+	config := strings.Split(d, "=")
+	if len(config) > 1 {
+		(*r).fileName = config[1]
+		(*r).format = config[0]
+	}
+}
+
+var report reportFile
+
 func jUnitReportSave(reportFile string, c suitConfig) {
 	if reportFile != "" {
+
 		T := struct {
 			SuitName    string
 			TotalTests  int
@@ -392,6 +422,12 @@ func jUnitReportSave(reportFile string, c suitConfig) {
 			Verbosity:   0,
 		}
 
+		funcMap := template.FuncMap{
+			"Quote": func(m string) string {
+				return strconv.Quote(m)
+			},
+		}
+
 		reportFile, err := os.Create(reportFile)
 		defer reportFile.Close()
 		if err != nil {
@@ -399,23 +435,77 @@ func jUnitReportSave(reportFile string, c suitConfig) {
 			return
 		}
 
-		jut, _ := template.New("junit report").Parse(string(jUnit.JUnitTemplate))
+		jut, _ := template.New("junit report").Funcs(funcMap).Parse(string(jUnit.JUnitTemplate))
 		jut.Execute(reportFile, T)
 	}
 	return
 }
 
+func jsonReportSave(reportFile string, c suitConfig) {
+
+	type TestData struct {
+		Name     string `json:"name"`
+		Status   bool   `json:"status"`
+		Duration string `json:"duration"`
+		Stdout   string `json:"stdout"`
+	}
+
+	type TestsSummary struct {
+		Success  int     `json:"success"`
+		Failed   int     `json:"failed"`
+		Rating   float64 `json:"rating"`
+		Duration string  `json:"duration"`
+	}
+
+	type JsonStructure struct {
+		TestName string       `json:"testName"`
+		Tests    []TestData   `json:"tests"`
+		Summary  TestsSummary `json:"summary"`
+	}
+
+	var jsonReportData JsonStructure
+	jsonReportData.TestName = c.Name
+	jsonReportData.Tests = []TestData{}
+
+	if c.getScenarioCount() > 0 {
+		for _, id := range c.getScenarioIds() {
+			if c.Cases[id].CanShow() {
+				t := TestData{
+					Name:     c.Cases[id].Case,
+					Status:   c.Cases[id].IsSuccessful(),
+					Duration: c.Cases[id].Duration,
+				}
+
+				if (verbosity > 1 && c.Cases[id].IsFailed()) || (verbosity > 2) {
+					t.Stdout = c.Cases[id].Stdout
+				}
+
+				jsonReportData.Tests = append(jsonReportData.Tests, t)
+			}
+		}
+	}
+
+	jsonReportData.Summary = TestsSummary{
+		Success:  c.successfull,
+		Failed:   c.failed,
+		Rating:   c.score,
+		Duration: c.duration,
+	}
+
+	reportJson, _ := json.MarshalIndent(jsonReportData, "", "  ")
+	ioutil.WriteFile(reportFile, reportJson, 0644)
+}
+
 func main() {
-	config := flag.String("c", "", "Local config path")
+	localConfig := flag.String("c", "", "Local config path")
 	remoteConfig := flag.String("C", "", "Remote config url")
 
 	filter := flag.String("f", "", "Run tests by regexp match")
 	wdir := flag.String("w", "", "Set working Dir")
 
-	juReportFile := flag.String("j", "", "JUnit report file")
-
 	// -o junit=...
 	// -o json=...
+	reportFlag := flag.String("o", "", "JSON or JUnit report file")
 
 	// -v1 show description if it's set
 	// -v2 show failed outputs
@@ -433,6 +523,8 @@ func main() {
 	}
 
 	flag.Parse()
+
+	report.parse(*reportFlag)
 
 	// Set Log Level
 	// https://golang.org/pkg/log/#example_Logger
@@ -458,19 +550,18 @@ func main() {
 	tmpFile, _ := ioutil.TempFile(tmpDir, "tmp.*")
 	tmpFileName := tmpFile.Name()
 
-	if *config == "" && *remoteConfig == "" {
+	if *localConfig == "" && *remoteConfig == "" {
 		log.Fatal("Please specify -c or -C")
 	}
 
-	if len(regexp.MustCompile("^http(s)?:").FindStringSubmatch(*config)) > 0 {
-		load(tmpFile, *config)
-		config = &tmpFileName
+	if len(regexp.MustCompile("^http(s)?:").FindStringSubmatch(*localConfig)) > 0 {
+		load(tmpFile, *localConfig)
+		localConfig = &tmpFileName
 		log.Println("tmpFile:", tmpFile.Name())
 	}
 
 	var c suitConfig
-	c.getConf(*config)
-	c.filter = *filter
+	c.getConf(*localConfig, *filter)
 
 	c.printHeader()
 	if c.getScenarioCount() > 0 {
@@ -488,5 +579,10 @@ func main() {
 	c.signOff()
 	c.printSummary()
 
-	jUnitReportSave(*juReportFile, c)
+	switch report.format {
+	case "junit":
+		jUnitReportSave(report.fileName, c)
+	case "json":
+		jsonReportSave(report.fileName, c)
+	}
 }
