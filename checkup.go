@@ -10,17 +10,37 @@ import (
 	"os"
 	"os/exec"
 	"regexp"
-	"strconv"
 	"strings"
 	"text/template"
 	"time"
 
 	"gopkg.in/yaml.v2"
+
+	"./templates/bash"
+	"./templates/jUnit"
 )
 
-type testCases []struct {
+var verbosity int = 0
+var workdir string = ""
+
+func print(msg string) {
+	if os.Getenv("TERM") == "" {
+		mod := regexp.MustCompile(`\033[^m]*m`).ReplaceAllString(msg, "")
+		mod  = regexp.MustCompile(`✓`).ReplaceAllString(mod, "ok")
+		mod  = regexp.MustCompile(`✗`).ReplaceAllString(mod, "NO")
+		log.Println(mod)
+	} else {
+		log.Println(msg)
+	}
+
+}
+
+type ScenarioItem struct {
+	// YAML-Defined data
+	Name        string            `yaml:"name"`
 	Case        string            `yaml:"case"`
 	GlobalEnv   map[string]string `yaml:"global_env"`
+	Env         map[string]string `yaml:"env"`
 	Workdir     string            `yaml:"workdir"`
 	Description string            `yaml:"description"`
 	Script      string            `yaml:"script"`
@@ -30,157 +50,264 @@ type testCases []struct {
 	Log         string            `yaml:"log"`
 	Fatal       bool              `yaml:"fatal"`
 	Debug       string            `yaml:"debug"`
+	Before			[]string					`yaml:"before"`
+	After		  	[]string					`yaml:"after"`
+
+	// Runtime data
+	Status      string
+	Result      error
+	Stdout      string
+	Duration		string
 }
 
-type testConfig struct {
-	Name  string    `yaml:"name"`
-	Cases testCases `yaml:"cases"`
+func (s *ScenarioItem) IsSuccessful() bool {
+	return s.Status == "success"
 }
 
-type stats struct {
-	TestName   string
-	TestStatus string
-	TestOutput string
-	TestTime   string
+func (s *ScenarioItem) IsFailed() bool {
+	return s.Status == "failed"
 }
 
-const runScript = `#!/usr/bin/env bash
-set -e
-
-[ "$0" != "/tmp/script.sh" ] && cp $0 /tmp/script.sh
-
-output=""
-status=0
-lines=()
-
-function fail() {
-  echo $@
-  exit 1
+func (s *ScenarioItem) CanShow() bool {
+	return s.Case != ""
 }
 
-function ok() {
-  echo -n
-	status=0
+func (s *ScenarioItem) RunBash() ([]byte, error) {
+	var stdout []byte = []byte("")
+	var err error = nil
+
+	if s.Script != "" {
+		tmpDir, _ := ioutil.TempDir("/var/tmp", "._")
+		defer os.RemoveAll(tmpDir)
+
+		tmpFile, _ := ioutil.TempFile(tmpDir, "tmp.*")
+
+		T := struct {
+			Script string
+		}{
+			Script: s.Script,
+		}
+
+		tmpl, _ := template.New("bash-script").Parse(string(bash.BashScript))
+		tmpl.Execute(tmpFile, T)
+
+		script := exec.Command("/bin/bash", tmpFile.Name())
+		script.Dir = workdir
+		script.Env = os.Environ()
+		for key, value := range s.GlobalEnv {
+			script.Env = append(script.Env,
+				fmt.Sprintf("%s=%s", key, value),
+			)
+		}
+
+		stdout, err = script.CombinedOutput()
+		s.Stdout = strings.TrimSpace(string(stdout))
+		s.Result = err
+
+		if err == nil {
+			s.Status = "success"
+		} else {
+			s.Status = "failed"
+		}
+
+		return stdout, err
+	}
+	return []byte(""), nil
 }
 
-function skip() {
-  [ -n $@ ] && echo $@
-  echo "SKIPPED DUE TO SCRIPT DECISION ..."
-  exit
+type suitConfig struct {
+	Name  string         `yaml:"name"`
+	Cases []ScenarioItem `yaml:"cases"`
+
+	filter    string
+
+	startTime time.Time
+	endTime   time.Time
+
+	all         int
+	successfull int
+	failed     int
+	score       float64
+	duration string
 }
 
-function run() {
-  local origFlags="$-"
-  set +eET
-  local origIFS="$IFS"
-  # 'output', 'status' are global variables available to tests.
-  # shellcheck disable=SC2034
-  # output="$("$@" 2>&1)"
-  # output="$(bash -c "$@" 2>&1)"
+func (c *suitConfig) getScenarioIds() []int {
+	result := []int{}
 
-  # shellcheck disable=SC2034
-  #status="$?"
+	for i := 0; i < len(c.Cases); i++ {
+		if c.Cases[i].Skip {
+			continue
+		}
 
-  outfile=$(mktemp)
-  # echo "$@" | bash 2>&1 > $outfile
-	cmd=""
-	for var in "$@"; do
-			if [[ "$var" =~ ( |\||\&|;) ]]; then
-				cmd="$cmd \"$var\""
-			else
-				cmd="$cmd $var"
-			fi
-	done
+		// will run only items with "case" field or without "case"/"name"
+		// apply filter to items with "case"
+		if c.Cases[i].Name == "" {
+			if c.filter != "" {
+				if strings.Contains(c.Cases[i].Case, c.filter) {
+					result = append(result, i)
+				}
+			}  else {
+				result = append(result, i)
+			}
+		}
+	}
+	return result
+}
+
+func (c *suitConfig) getScenarioCount() int {
+	result := 0
+	for _, i := range c.getScenarioIds() {
+		if c.Cases[i].CanShow() {
+			result++
+		}
+	}
+	return result
+}
+
+func (c *suitConfig) getIdByName(name string) int {
+	for id, item := range c.Cases {
+		if item.Name == name {
+			return id
+		}
+	}
+	return -1
+}
+
+func (c *suitConfig) printHeader() {
+	scenariosCount := c.getScenarioCount()
 	
-  if [ $# -eq 1 ]; then
-  	echo "bash -c $cmd" | bash 2>&1 > $outfile
-		status="$?"
-	else
-	  echo "${cmd}" | bash 2>&1 > $outfile
-	  status="$?"
-	fi
+	c.startTime = time.Now()
 
-  output="$(cat ${outfile})"
+	if scenariosCount > 1 {
+		log.Printf("%s, 1..%d tests\n", c.Name, scenariosCount)
+		return
+	}
+
+	if scenariosCount == 1 {
+		log.Printf("%s, 1 test\n", c.Name)
+		return
+	}
 	
-  # shellcheck disable=SC2034,SC2206
-  IFS=$'\n' lines=($output)
-  IFS="$origIFS"
-  set "-$origFlags"
-
-	echo "(run, $(pwd)) => ${cmd}"
-	# [ -n "${output}" ] && echo "output=${output}"
-	echo "rc: ${status}"
-	if [ ${#lines[@]} -gt 1 ]; then
-		echo "output: |"
-		echo "$output" | sed 's/^/  /'
-	else
-		echo "output: '${output}'"
-	fi
-	
-  return 0
+	if scenariosCount == 0 {
+		log.Printf("%s, no tests to run\n", c.Name)
+		return
+	}
 }
 
-function assert_success() {
-  [ $# -gt 0 ] && run "$@"
-	[ ${status:-0} -ne 0 ] && fail "CMD Failed: $@" || ok
+func (c *suitConfig) signOff() {
+	c.endTime = time.Now()
+
+	sum := 0
+	max := 0
+	failed := 0
+	all := 0
+
+	for _, i := range c.getScenarioIds() {
+		item := c.Cases[i]
+		if item.CanShow() {
+			all++
+			max += item.Weight
+			if item.IsSuccessful() {
+				sum += item.Weight
+			} else {
+				failed++
+			}
+		}
+	}
+
+	c.successfull = all - failed
+	c.failed = failed
+	c.all = all
+	c.score = 100*float64(sum)/float64(max)
+	c.duration = duration(c.startTime, c.endTime)
 }
 
-function assert_failure() {
-	echo 'here'
-  [ ${status:-0} -eq 0 ] && fail "RC Assertion Failed: ${status} == 0, but shouldn't be 0" || ok
+func (c *suitConfig) printSummary() {
+	if c.all > 0 {
+		if c.failed > 0 {
+			print(fmt.Sprintf("%d (of %d) tests passed, \033[31m%d tests failed,\033[0m rated as %.2f%%, spent %s", c.successfull, c.all, c.failed, c.score, c.duration))
+		} else {
+			print(fmt.Sprintf("\033[32m%d (of %d) tests passed, %d tests failed, rated as %.2f%%, spent %s\033[0m", c.successfull, c.all, c.failed, c.score, c.duration))
+		}
+	}
 }
 
-function assert_equal() {
-  [[ "x$1" != "x$2" ]] && fail "Assertion Failed: '$1' != '$2'" || ok
+func (c *suitConfig) printTestStatus(id int, asId ...int) {
+	testCase := c.Cases[id]
+	i := id
+	if len(asId) > 0 {
+		i = asId[0]
+	}
+
+	for _, j := range c.getScenarioIds() {
+		if j == id {
+			if testCase.CanShow() {
+				if testCase.IsSuccessful() {
+					print(fmt.Sprintf("\033[32m✓ %2d  %s, %s\033[0m", i, testCase.Case, testCase.Duration))
+				} else {
+					print(fmt.Sprintf("\033[31m✗ %2d  %s, %s\033[0m", i, testCase.Case, testCase.Duration))
+				}
+
+				if (verbosity > 1 && testCase.IsFailed()) || (verbosity > 2) {
+					for _, name := range testCase.Before {
+						log.Printf("(run: %s)\n", name)
+						log.Printf(">> script:\n%s\n", strings.TrimSpace(c.Cases[c.getIdByName(name)].Script))
+						log.Printf(">> stdout:\n%s\n", c.Cases[c.getIdByName(name)].Stdout)
+						if c.Cases[c.getIdByName(name)].Result == nil {
+							log.Printf(">> exit status 0 (successfull)")
+						} else {
+							log.Printf(">> %s (failure)", c.Cases[c.getIdByName(name)].Result)
+						}
+						log.Printf("---")
+					}
+
+					log.Printf("~~~~~")
+					log.Printf(">> stdout:\n%s", strings.TrimSpace(testCase.Stdout))
+					if testCase.Result == nil {
+						log.Printf(">> exit status 0 (successfull)")
+					} else {
+						log.Printf(">> %s (failure)", testCase.Result)
+					}
+					log.Printf("~~~~~")
+
+					for _, name := range testCase.After {
+						log.Printf("(run: %s)\n", name)
+						log.Printf(">> script:\n%s\n", strings.TrimSpace(c.Cases[c.getIdByName(name)].Script))
+						log.Printf(">> stdout:\n%s\n", c.Cases[c.getIdByName(name)].Stdout)
+						if c.Cases[c.getIdByName(name)].Result == nil {
+							log.Printf(">> exit status 0 (successfull)")
+						} else {
+							log.Printf(">> %s (failure)", c.Cases[c.getIdByName(name)].Result)
+						}
+						log.Printf("---")
+					}
+				}
+			}
+			return
+		}
+	}
 }
 
-function assert_not_equal() {
-  [[ "x$1" == "x$2" ]] && fail "Assertion Failed: '$1' == '$2'" || ok
+func (c *suitConfig) exec(item int) {
+	testCase := &c.Cases[item]
+	if testCase.Script != "" {
+		taskStartTime := time.Now()
+
+		for _, name := range testCase.Before {
+			c.Cases[c.getIdByName(name)].RunBash()
+		}
+
+		testCase.RunBash()
+
+		for _, name := range testCase.After {
+			c.Cases[c.getIdByName(name)].RunBash()
+		}
+
+		testCase.Duration = duration(taskStartTime, time.Now())
+	}
 }
 
-function assert_output() {
-  case "$1" in
-  -p|--partial) 
-    [[ "$output" =~ "$2" ]] && ok || fail "Stdout Assertion Failed (Partial, '$2')"
-    ;;
-  -e|--regexp)
-    echo "$output" | grep -E "$2" >/dev/null && ok || fail "Stdout Assertion Failed (Regexp, '$2')"
-    ;;
-  *) 
-    [ "$output" == "$@" ] && ok || fail "Stdout Assertion Failed (Full mistmatch)"
-    ;;
-  esac
-}
-
-{{ .Script }}
-exit ${status:-0}
-`
-
-const jUnitTemplate = `<?xml version="1.0" encoding="UTF-8"?>
-<testsuites time="">
-	<testsuite name="{{ .SuitName }}" tests="{{ .TotalTests }}" failures="{{ .FailedTests }}" errors="0" skipped="0" time="{{ .TotalTime }}" timestamp="2020-10-25T13:53:31" hostname="38b98cdc4272">
-
-	{{ $verbosity := .Verbosity }}
-	{{- range $t := .Tests }}
-	{{- if eq $t.TestStatus "success" }}
-		<testcase classname="{{ $.SuitName }}" name={{ $t.TestName }} time="{{ $t.TestTime }}">
-			<!-- system-out>STDOUT text</system-out -->
-		</testcase>
-	{{- else }}
-		<testcase classname="{{ $.SuitName }}" name={{ $t.TestName }} time="{{ $t.TestTime }}">
-			{{ if gt $verbosity 1 }}<failure type="failure">{{ $t.TestOutput }}</failure>{{ end }}
-		</testcase>
-	{{- end}}
-  {{- end }}
-  </testsuite>
-</testsuites>
-`
-
-var verbosity int = 0
-var workdir string = ""
-var suitName string = ""
-
-func (t *testConfig) getConf(config string) *testConfig {
+func (t *suitConfig) getConf(config string) *suitConfig {
 	yamlFile, err := ioutil.ReadFile(config)
 
 	if err != nil {
@@ -214,54 +341,20 @@ func (t *testConfig) getConf(config string) *testConfig {
 			}
 		}
 
-		if (*t).Cases[i].Log != "" {
-			logging := (*t).Cases[i].Log
-			if logging == "True" || logging == "true" || logging == "Yes" || logging == "yes" {
-				(*t).Cases[i].Log = "true"
+		// if (*t).Cases[i].Log != "" {
+		// 	logging := (*t).Cases[i].Log
+		// 	if logging == "True" || logging == "true" || logging == "Yes" || logging == "yes" {
+		// 		(*t).Cases[i].Log = "true"
+		// 	}
+		// }
+
+		if (*t).Cases[i].CanShow() {
+			if (*t).Cases[i].Weight == 0 {
+				(*t).Cases[i].Weight = 1
 			}
 		}
 	}
 	return t
-}
-
-func run(content string, workdir string, envs map[string]string, debug string) ([]byte, error) {
-	if verbosity > 3 {
-		log.Print("script content: ", content)
-	}
-	if content != "" {
-		tmpDir, _ := ioutil.TempDir("/var/tmp", "._")
-		if verbosity > 4 {
-			defer os.RemoveAll(tmpDir)
-		}
-
-		tmpFile, _ := ioutil.TempFile(tmpDir, "tmp.*")
-		if verbosity > 3 {
-			log.Printf("run(): %s", tmpFile.Name())
-		}
-
-		T := struct {
-			Script string
-			Debug  string
-		}{
-			Script: content,
-			Debug:  debug,
-		}
-
-		tmpl, _ := template.New("script").Parse(string(runScript))
-		tmpl.Execute(tmpFile, T)
-
-		script := exec.Command("/bin/bash", tmpFile.Name())
-		script.Dir = workdir
-		script.Env = os.Environ()
-		for key, value := range envs {
-			script.Env = append(script.Env,
-				fmt.Sprintf("%s=%s", key, value),
-			)
-		}
-
-		return script.CombinedOutput()
-	}
-	return []byte(""), nil
 }
 
 func load(tmpFile *os.File, URL string) error {
@@ -279,6 +372,39 @@ func duration(start time.Time, finish time.Time) string {
 	return finish.Sub(start).Truncate(time.Millisecond).String()
 }
 
+func jUnitReportSave(reportFile string, c suitConfig) {
+	if reportFile != "" {
+		T := struct {
+			SuitName    string
+			TotalTests  int
+			FailedTests int
+			Tests       []ScenarioItem
+			TotalTime   string
+			TimeStamp   string
+			Verbosity   int
+		}{
+			SuitName:    c.Name,
+			TotalTests:  c.all,
+			FailedTests: c.failed,
+			Tests:       c.Cases,
+			TotalTime:   c.duration,
+			TimeStamp:   time.Now().Format("2006-01-02T15:04:05"),
+			Verbosity:   0,
+		}
+
+		reportFile, err := os.Create(reportFile)
+		defer reportFile.Close()
+		if err != nil {
+			log.Println(err)
+			return
+		}
+
+		jut, _ := template.New("junit report").Parse(string(jUnit.JUnitTemplate))
+		jut.Execute(reportFile, T)
+	}
+	return
+}
+
 func main() {
 	config := flag.String("c", "", "Local config path")
 	remoteConfig := flag.String("C", "", "Remote config url")
@@ -291,8 +417,8 @@ func main() {
 	// -o junit=...
 	// -o json=...
 
-	// -v1   show description if it's set
-	// -v2  show failed outputs
+	// -v1 show description if it's set
+	// -v2 show failed outputs
 	// -v3 show failed and successful outputs
 	v1 := flag.Bool("v1", false, "Verbosity Mode 1")
 	v2 := flag.Bool("v2", false, "Verbosity Mode 2")
@@ -308,7 +434,11 @@ func main() {
 
 	flag.Parse()
 
-	verbosity := func() int {
+	// Set Log Level
+	// https://golang.org/pkg/log/#example_Logger
+	log.SetFlags(0)
+
+	verbosity = func() int {
 		if *v1 {
 			return 1
 		}
@@ -338,178 +468,25 @@ func main() {
 		log.Println("tmpFile:", tmpFile.Name())
 	}
 
-	if verbosity > 1 {
-		log.Println("config:", *config)
-		log.Println("verbosity:", verbosity)
-	}
-
-	var c testConfig
+	var c suitConfig
 	c.getConf(*config)
+	c.filter = *filter
 
-	suitName = c.Name
-
-	total := 0
-	tests := []int{}
-
-	for i := 0; i < len(c.Cases); i++ {
-		if c.Cases[i].Skip {
-			continue
-		}
-
-		if *filter != "" {
-			if strings.Contains(c.Cases[i].Case, *filter) {
-				tests = append(tests, i)
-				if c.Cases[i].Case != "" {
-					total++
-				}
-
-			}
-		} else {
-			tests = append(tests, i)
-			if c.Cases[i].Case != "" {
-				total++
+	c.printHeader()
+	if c.getScenarioCount() > 0 {
+		print("-----------------------------------------------------------------------------------")
+		i := 1
+		for _, id := range c.getScenarioIds() {
+			c.exec(id)
+			if c.Cases[id].CanShow() {
+				c.printTestStatus(id, i)
+				i ++	
 			}
 		}
+		print("-----------------------------------------------------------------------------------")
 	}
+	c.signOff()
+	c.printSummary()
 
-	gainedWeights := 0
-	totalWeights := 0
-
-	success := 0
-	failed := 0
-
-	if total > 0 {
-		log.Println("-----------------------------------------------------------------------------------")
-		if suitName != "" {
-			if total == 1 {
-				log.Printf("Running '%s', 1 test\n", suitName)
-			} else {
-				log.Printf("Running '%s', 1..%d tests\n", suitName, total)
-			}
-		} else {
-			if total == 1 {
-				log.Printf("Running 1 test")
-			} else {
-				log.Printf("Running 1..%d tests\n", total)
-			}
-		}
-		log.Println("-----------------------------------------------------------------------------------")
-	}
-
-	stat := []stats{}
-
-	startTime := time.Now()
-
-	taskStartTime := time.Now()
-	taskFinishTime := time.Now()
-
-	for i := 0; i < len(tests); i++ {
-		test := c.Cases[tests[i]]
-
-		if test.Case != "" {
-			if test.Weight == 0 {
-				test.Weight = 1
-			}
-
-			totalWeights = totalWeights + test.Weight
-
-			if verbosity > 3 {
-				log.Println()
-				log.Printf("Running - %s\n", test.Case)
-			}
-		}
-
-		taskStartTime = time.Now()
-		stdout, err := run(test.Script, test.Workdir, test.GlobalEnv, test.Debug)
-		taskFinishTime = time.Now()
-
-		if test.Case != "" {
-			if err == nil {
-				if suitName != "" {
-					// log.Printf("\033[32m✓ [%s] => %s (%d), %s\033[0m\n", suitName, test.Case, test.Weight, taskFinishTime.Sub(taskStartTime).Truncate(time.Millisecond).String())
-					log.Printf("\033[32m✓ [%s] => %s (%d), %s\033[0m\n", suitName, test.Case, test.Weight, duration(taskStartTime, taskFinishTime))
-				} else {
-					log.Printf("\033[32m✓ %s (%d), %s\033[0m\n", test.Case, test.Weight, duration(taskStartTime, taskFinishTime))
-				}
-
-				gainedWeights = gainedWeights + test.Weight
-				success++
-				stat = append(stat, stats{TestName: strconv.Quote(test.Case), TestStatus: "success", TestOutput: strconv.Quote(string(stdout)), TestTime: duration(taskStartTime, taskFinishTime)})
-			} else {
-				if suitName != "" {
-					log.Printf("\033[31m✗ [%s] -> %s\033[0m\n", suitName, test.Case)
-				} else {
-					log.Printf("\033[31m✗ %s\033[0m\n", test.Case)
-				}
-
-				failed++
-				stat = append(stat, stats{TestName: strconv.Quote(test.Case), TestStatus: "failed", TestOutput: strconv.Quote(string(stdout)), TestTime: duration(taskStartTime, taskFinishTime)})
-			}
-
-			if verbosity > 0 && test.Description != "" {
-				log.Printf("  Description: %s", test.Description)
-			}
-
-			if verbosity == 2 && err != nil {
-				log.Println("  Result:", err)
-				log.Print(fmt.Sprintf("  Output:\n%s", string(stdout)))
-			}
-
-			if verbosity == 3 {
-				log.Println("  Result:", err)
-				log.Print(fmt.Sprintf("  Output:\n%s", string(stdout)))
-			}
-		}
-	}
-	finishTime := time.Now()
-
-	log.Println("-----------------------------------------------------------------------------------")
-	log.Println("Tests Summary:")
-
-	// msgTestPassed := fmt.Sprintf("%d (of %d) tests passed", success, total)
-	// msgTestFailed := fmt.Sprintf("%d tests failed;", failed)
-
-	// if failed > 0 {
-
-	// } else {
-	// 	msgTestPassed = fmt.Sprintf("%d (of %d) tests passed", success, total)
-	// }
-
-	if failed > 0 {
-		log.Printf("  %d (of %d) tests passed, \033[31m%d tests failed;\033[0m rated as %.2f%%", success, total, failed, 100*float64(gainedWeights)/float64(totalWeights))
-	} else {
-		log.Printf("  \033[32m%d (of %d) tests passed,\033[0m %d tests failed; rated as %.2f%%", success, total, failed, 100*float64(gainedWeights)/float64(totalWeights))
-	}
-
-	log.Println()
-	log.Println("Time Spent: ", duration(startTime, finishTime))
-	log.Println("-----------------------------------------------------------------------------------")
-
-	if *juReportFile != "" {
-		T := struct {
-			SuitName    string
-			TotalTests  int
-			FailedTests int
-			Tests       []stats
-			TotalTime   string
-			Verbosity   int
-		}{
-			SuitName:    suitName,
-			TotalTests:  total,
-			FailedTests: failed,
-			Tests:       stat,
-			TotalTime:   duration(startTime, finishTime),
-			Verbosity:   verbosity,
-		}
-
-		reportFile, err := os.Create(*juReportFile)
-		defer reportFile.Close()
-		if err != nil {
-			log.Println(err)
-			return
-		}
-
-		jut, _ := template.New("junit report").Parse(string(jUnitTemplate))
-		jut.Execute(reportFile, T)
-	}
+	jUnitReportSave(*juReportFile, c)
 }

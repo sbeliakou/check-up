@@ -1,0 +1,28 @@
+name: Using Before and After
+cases:
+
+- name: run contianer 1
+  script: docker run --name test1 -d centos:7 sleep infinity
+
+- name: run contianer 2
+  script: docker run --name test -d centos:7 sleep infinity
+
+- name: remove containers
+  script: docker rm -f $(docker ps -q)
+
+- case: check /tmp is created
+  script: test -d /tmp
+
+- case: docker run
+  script: |
+    docker ps
+    docker run --name test -d centos:7 sleep infinity
+  before:
+    - remove containers
+    - run contianer 1
+    - run contianer 2
+  after:
+    - remove containers
+
+- case: check /tmp is created
+  script: test -d /tmp
