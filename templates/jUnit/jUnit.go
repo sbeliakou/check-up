@@ -8,12 +8,12 @@ const JUnitTemplate = `<?xml version="1.0" encoding="UTF-8"?>
 	{{- range $t := .Tests }}
 		{{- if $t.CanShow }}
 			{{- if $t.IsSuccessful }}
-				<testcase classname="{{ $.SuitName }}" name={{ $t.Case }} time="{{ $t.Duration }}">
+				<testcase classname="{{ $.SuitName }}" name={{ Quote $t.Case }} time="{{ $t.Duration }}">
 					<!-- system-out>STDOUT text</system-out -->
 				</testcase>
 			{{- else }}
-				<testcase classname="{{ $.SuitName }}" name={{ $t.Case }} time="{{ $t.Duration }}">
-					<failure type="failure">{{ $t.Stdout }}</failure>
+				<testcase classname="{{ $.SuitName }}" name={{ $t.Case | Quote }} time="{{ $t.Duration }}">
+					<failure type="failure">{{ Quote $t.Stdout }}</failure>
 				</testcase>
 			{{-  end }}
 		{{-  end }}
