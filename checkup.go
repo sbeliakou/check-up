@@ -29,7 +29,7 @@ func print(msg string) {
 	if os.Getenv("TERM") == "" {
 		mod := regexp.MustCompile(`\033[^m]*m`).ReplaceAllString(msg, "")
 		mod = regexp.MustCompile(`✓`).ReplaceAllString(mod, "ok")
-		mod = regexp.MustCompile(`✗`).ReplaceAllString(mod, "NO")
+		mod = regexp.MustCompile(`✗`).ReplaceAllString(mod, "not ok")
 		log.Println(mod)
 	} else {
 		log.Println(msg)
@@ -518,7 +518,7 @@ func main() {
 		fmt.Fprintf(os.Stderr, "\nUsage: ./checkup [Options]\n\nOptions:\n")
 
 		flag.VisitAll(func(f *flag.Flag) {
-			fmt.Fprintf(os.Stderr, "   -%-5s  %v\n", f.Name, f.Usage) // f.Name, f.Value
+			fmt.Fprintf(os.Stderr, "   %-5s  %v\n", "-" + f.Name, f.Usage) // f.Name, f.Value
 		})
 
 		fmt.Fprintf(os.Stderr, "\nMore Deetails: https://github.com/sbeliakou/check-up/\n\n")

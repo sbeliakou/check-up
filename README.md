@@ -2,6 +2,15 @@
 
 Check-up is a testing framework for Bash. It provides a simple way to verify that the UNIX programs you write behave as expected.
 
+## Installation
+
+You can find all releases here: https://github.com/sbeliakou/check-up/releases
+
+```
+$ wget https://github.com/sbeliakou/check-up/releases/download/${TAG_ID}/checkup-linux -o /usr/bin/checkup
+$ chmod a+x /usr/bin/checkup
+```
+
 ## Writing tests
 
 A test file is a list of bash-scripts in a form of YAML structure:
@@ -18,7 +27,6 @@ cases:
 ```
 
 In some cases you'd like to run scripts before executing tests cases. It's useful if you need to install some software/tools or for example run docker container.
-
 
 ```yaml
 name: Simple Test 2
@@ -56,99 +64,127 @@ cases:
 - script: docker rm -f test-server
 ```
 
+### Test-Case Samples
+
+Expecting command finishes successfully
+```yaml
+- case: expecting command finishes successfully (bash way)
+  script: |
+    command args
+
+- case: expecting command finishes successfully (the same as above, bats way)
+  script: |
+    run command args
+    assert_success
+```
+
+Expecting the command fails
+```yaml
+- case: expecting command fails (bats way)
+  script: |
+    run command args
+    assert_failure
+```
+
+Expecting the command prints out the exact value
+```yaml
+- case: expecting command prints the exact value (bash way)
+  script: |
+    echo "exact value" | grep -w "exact value"
+
+- case: expecting command prints the exact value (the same as above, bats way)
+  script: |
+    run echo "exact value"
+    assert_output "exact value"
+```
+
+Expecting the command prints out some message
+```yaml
+- case: expecting command prints some message (bash way)
+  script: |
+    echo "the message can be like this one: 'hello world!'" | grep "hello world"
+
+- case: expecting command prints some message (the same as above, bats way)
+  script: |
+    run echo "the message can be like this one: 'hello world!'"
+    assert_output --partial "hello world!"
+```
 ## Running tests
 
 To run your tests, invoke the `checkup` interpreter with a path to a test file.
 
 ```
-$ checkup -c examples/1_simple_suit.yml 
-2021/03/15 14:47:29 -----------------------------------------------------------------------------------
-2021/03/15 14:47:29 Running 'Simple Test', 1..3 tests
-2021/03/15 14:47:29 -----------------------------------------------------------------------------------
-2021/03/15 14:47:29 ✗ [Simple Test] -> Check if '/tmp/dir1' created
-2021/03/15 14:47:29 ✓ [Simple Test] => Check if '/opt' created (1), 10ms
-2021/03/15 14:47:29 ✗ [Simple Test] -> Check if 'user1' exists
-2021/03/15 14:47:29 -----------------------------------------------------------------------------------
-2021/03/15 14:47:29 Tests Summary:
-2021/03/15 14:47:29   1 (of 3) tests passed, 2 tests failed; rated as 33.33%
-2021/03/15 14:47:29 
-2021/03/15 14:47:29 Time Spent:  42ms
-2021/03/15 14:47:29 -----------------------------------------------------------------------------------
+$ [ Simple Test ], 1..3 tests
+-----------------------------------------------------------------------------------
+✗  1  Check if '/tmp/dir1' created, 6ms
+✓  2  Check if '/opt' created, 7ms
+✗  3  Check if 'user1' exists, 130ms
+-----------------------------------------------------------------------------------
+1 (of 3) tests passed, 2 tests failed, rated as 33.33%, spent 144ms
 ```
 
 ```
 $ checkup -c examples/2_simple_suit.yml
-2021/03/15 15:25:05 -----------------------------------------------------------------------------------
-2021/03/15 15:25:05 Running 'Simple Test 2', 1..4 tests
-2021/03/15 15:25:05 -----------------------------------------------------------------------------------
-2021/03/15 15:25:06 ✗ [Simple Test 2] -> Should finish successfully
-2021/03/15 15:25:07 ✗ [Simple Test 2] -> Should create "test-user"
-2021/03/15 15:25:07 ✗ [Simple Test 2] -> Should create "unwilling-user"
-2021/03/15 15:25:08 ✓ [Simple Test 2] => Shouldn't create "unwilling-user" (1), 352ms
-2021/03/15 15:25:08 -----------------------------------------------------------------------------------
-2021/03/15 15:25:08 Tests Summary:
-2021/03/15 15:25:08   1 (of 4) tests passed, 3 tests failed; rated as 25.00%
-2021/03/15 15:25:08 
-2021/03/15 15:25:08 Time Spent:  2.846s
-2021/03/15 15:25:08 -----------------------------------------------------------------------------------
+[ Simple Test 2 ], 1..4 tests
+-----------------------------------------------------------------------------------
+✗  1  Should finish successfully, 308ms
+✗  2  Should create "test-user", 329ms
+✗  3  Should create "unwilling-user", 291ms
+✓  4  Shouldn't create "unwilling-user", 241ms
+-----------------------------------------------------------------------------------
+1 (of 4) tests passed, 3 tests failed, rated as 25.00%, spent 2.172s
 ```
 
 Actually, the script we are testing is located in different directory:
 ```
-checkup -c examples/2_simple_suit.yml -w examples/workspace/
-2021/03/15 15:24:40 -----------------------------------------------------------------------------------
-2021/03/15 15:24:40 Running 'Simple Test 2', 1..4 tests
-2021/03/15 15:24:40 -----------------------------------------------------------------------------------
-2021/03/15 15:24:42 ✓ [Simple Test 2] => Should finish successfully (1), 647ms
-2021/03/15 15:24:42 ✓ [Simple Test 2] => Should create "test-user" (1), 473ms
-2021/03/15 15:24:43 ✗ [Simple Test 2] -> Should create "unwilling-user"
-2021/03/15 15:24:43 ✓ [Simple Test 2] => Shouldn't create "unwilling-user" (1), 339ms
-2021/03/15 15:24:44 -----------------------------------------------------------------------------------
-2021/03/15 15:24:44 Tests Summary:
-2021/03/15 15:24:44   3 (of 4) tests passed, 1 tests failed; rated as 75.00%
-2021/03/15 15:24:44 
-2021/03/15 15:24:44 Time Spent:  3.212s
-2021/03/15 15:24:44 -----------------------------------------------------------------------------------
+$ checkup -c examples/2_simple_suit.yml -w examples/workspace/
+[ Simple Test 2 ], 1..4 tests
+-----------------------------------------------------------------------------------
+✓  1  Should finish successfully, 525ms
+✓  2  Should create "test-user", 375ms
+✗  3  Should create "unwilling-user", 350ms
+✓  4  Shouldn't create "unwilling-user", 310ms
+-----------------------------------------------------------------------------------
+3 (of 4) tests passed, 1 tests failed, rated as 75.00%, spent 2.849s
 ```
 
 ### Increasing verbosity
 
 ```
 $ checkup -c examples/2_simple_suit.yml -v2
-2021/03/15 15:26:58 config: examples/2_simple_suit.yml
-2021/03/15 15:26:58 verbosity: 2
-2021/03/15 15:26:58 -----------------------------------------------------------------------------------
-2021/03/15 15:26:58 Running 'Simple Test 2', 1..4 tests
-2021/03/15 15:26:58 -----------------------------------------------------------------------------------
-2021/03/15 15:27:00 ✗ [Simple Test 2] -> Should finish successfully
-2021/03/15 15:27:00   Result: exit status 1
-2021/03/15 15:27:00   Output:
+[ Simple Test 2 ], 1..4 tests
+-----------------------------------------------------------------------------------
+✗  1  Should finish successfully, 326ms
+~~~~~
+>> stdout:
 bash: ./create_user.sh: No such file or directory
-(run, current_dir) =>  docker exec test-server bash ./create_user.sh test-user
+(run, /Users/sbeliakou/ws/github/playpit-labs/check-up) =>  docker exec test-server bash ./create_user.sh test-user
 rc: 127
 output: ''
 CMD Failed:
-2021/03/15 15:27:00 ✗ [Simple Test 2] -> Should create "test-user"
-2021/03/15 15:27:00   Result: exit status 1
-2021/03/15 15:27:00   Output:
+>> exit status 1 (failure)
+~~~~~
+✗  2  Should create "test-user", 383ms
+~~~~~
+>> stdout:
 id: test-user: no such user
-(run, current_dir) =>  docker exec test-server id test-user
+(run, /Users/sbeliakou/ws/github/playpit-labs/check-up) =>  docker exec test-server id test-user
 rc: 1
 output: ''
 CMD Failed:
-2021/03/15 15:27:00 ✗ [Simple Test 2] -> Should create "unwilling-user"
-2021/03/15 15:27:00   Result: exit status 1
-2021/03/15 15:27:00   Output:
+>> exit status 1 (failure)
+~~~~~
+✗  3  Should create "unwilling-user", 324ms
+~~~~~
+>> stdout:
 id: unwilling-user: no such user
-(run, current_dir) =>  docker exec test-server id unwilling-user
+(run, /Users/sbeliakou/ws/github/playpit-labs/check-up) =>  docker exec test-server id unwilling-user
 rc: 1
 output: ''
 CMD Failed:
-2021/03/15 15:27:01 ✓ [Simple Test 2] => Shouldn't create "unwilling-user" (1), 343ms
-2021/03/15 15:27:01 -----------------------------------------------------------------------------------
-2021/03/15 15:27:01 Tests Summary:
-2021/03/15 15:27:01   1 (of 4) tests passed, 3 tests failed; rated as 25.00%
-2021/03/15 15:27:01 
-2021/03/15 15:27:01 Time Spent:  2.683s
-2021/03/15 15:27:01 -----------------------------------------------------------------------------------
+>> exit status 1 (failure)
+~~~~~
+✓  4  Shouldn't create "unwilling-user", 262ms
+-----------------------------------------------------------------------------------
+1 (of 4) tests passed, 3 tests failed, rated as 25.00%, spent 2.208s
 ```

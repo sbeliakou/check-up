@@ -1,0 +1,33 @@
+name: Asserts Samples
+cases:
+- case: expecting command finishes successfully (bash way)
+  script: |
+    command args
+
+- case: expecting command finishes successfully (the same as above, bats way)
+  script: |
+    run command args
+    assert_succes
+
+- case: expecting command fails (the same as above, bats way)
+  script: |
+    run command args
+    assert_failure
+
+- case: expecting command prints exact value (bash way)
+  script: |
+    echo "exact value" | grep -w "exact value"
+
+- case: expecting command prints exact value (the same as above, bats way)
+  script: |
+    run echo "exact value"
+    assert_output "exact value"
+
+- case: expecting command prints some message (bash way)
+  script: |
+    echo "the message can be like this one: 'hello world!'" | grep "hello world"
+
+- case: expecting command prints some message (the same as above, bats way)
+  script: |
+    run echo "the message can be like this one: 'hello world!'"
+    assert_output --partial "hello world!"
