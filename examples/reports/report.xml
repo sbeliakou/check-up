@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuites time="">
+	<testsuite name="Using Before and After" tests="3" failures="1" errors="0" skipped="0" time="2.199s" timestamp="2021-03-24T23:53:54" hostname="">
+				<testcase classname="Using Before and After" name="check /tmp is created" time="4ms">
+					<!-- system-out>STDOUT text</system-out -->
+				</testcase>
+				<testcase classname="Using Before and After" name="docker run" time="2.19s">
+					<failure type="failure">"CONTAINER ID   IMAGE      COMMAND            CREATED        STATUS                  PORTS     NAMES\n74acf8fa5847   centos:7   \"sleep infinity\"   1 second ago   Up Less than a second             test\n9feaf24ac7a8   centos:7   \"sleep infinity\"   1 second ago   Up Less than a second             test1\ndocker: Error response from daemon: Conflict. The container name \"/test\" is already in use by container \"74acf8fa5847045a94850d0377a9fdfca3174c0e9777ea64a352c9b518ab3eed\". You have to remove (or rename) that container to be able to reuse that name.\nSee 'docker run --help'."</failure>
+				</testcase>
+				<testcase classname="Using Before and After" name="check /tmp is created" time="4ms">
+					<!-- system-out>STDOUT text</system-out -->
+				</testcase>
+  </testsuite>
+</testsuites>

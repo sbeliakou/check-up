@@ -1,0 +1,53 @@
+{
+  "testName": "Asserts Samples",
+  "tests": [
+    {
+      "name": "expecting command finishes successfully (bash way)",
+      "status": false,
+      "duration": "7ms",
+      "stdout": ""
+    },
+    {
+      "name": "expecting command finishes successfully (the same as above, bats way)",
+      "status": false,
+      "duration": "27ms",
+      "stdout": ""
+    },
+    {
+      "name": "expecting command fails (the same as above, bats way)",
+      "status": true,
+      "duration": "23ms",
+      "stdout": ""
+    },
+    {
+      "name": "expecting command prints exact value (bash way)",
+      "status": true,
+      "duration": "10ms",
+      "stdout": ""
+    },
+    {
+      "name": "expecting command prints exact value (the same as above, bats way)",
+      "status": true,
+      "duration": "27ms",
+      "stdout": ""
+    },
+    {
+      "name": "expecting command prints some message (bash way)",
+      "status": true,
+      "duration": "12ms",
+      "stdout": ""
+    },
+    {
+      "name": "expecting command prints some message (the same as above, bats way)",
+      "status": true,
+      "duration": "26ms",
+      "stdout": ""
+    }
+  ],
+  "summary": {
+    "success": 5,
+    "failed": 2,
+    "rating": 71.42857142857143,
+    "duration": "136ms"
+  }
+}
