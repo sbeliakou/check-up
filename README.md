@@ -188,12 +188,12 @@ There're 3 types of items which can be run:
 ## Options
 
 ### Providing Test Case Scenarios and Resources:
-- "-c" provide test case file on local filesystem
-- "-C" provide test case file on remote by URL
-- "-w" set working directory with source files for testing cases
+- `-c` provide test case file on local filesystem
+- `-C` provide test case file on remote by URL
+- `-w` set working directory with source files for testing cases
 
 ### Verbosity 
-- "-v1"/"-v2"/"-v3" verbosity level, shows what happens during test case execution
+- `-v1`/`-v2`/`-v3` verbosity level, shows what happens during test case execution
 
 ### Reporting output
 
