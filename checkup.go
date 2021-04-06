@@ -18,8 +18,8 @@ import (
 
 	"gopkg.in/yaml.v2"
 
-	"./templates/bash"
-	"./templates/jUnit"
+	"./modules/bash"
+	"./modules/jUnit"
 )
 
 var verbosity int = 0
@@ -28,8 +28,8 @@ var workdir string = ""
 func print(msg string) {
 	if os.Getenv("TERM") == "" {
 		mod := regexp.MustCompile(`\033[^m]*m`).ReplaceAllString(msg, "")
-		mod = regexp.MustCompile(`✓`).ReplaceAllString(mod, "ok")
-		mod = regexp.MustCompile(`✗`).ReplaceAllString(mod, "not ok")
+		mod = regexp.MustCompile(`✓`).ReplaceAllString(mod, "success")
+		mod = regexp.MustCompile(`✗`).ReplaceAllString(mod, "FAILURE")
 		log.Println(mod)
 	} else {
 		log.Println(msg)
@@ -124,8 +124,6 @@ func (s *ScenarioItem) RunBash() ([]byte, error) {
 type suitConfig struct {
 	Name  string         `yaml:"name"`
 	Cases []ScenarioItem `yaml:"cases"`
-
-	filter string
 
 	startTime time.Time
 	endTime   time.Time
@@ -518,7 +516,7 @@ func main() {
 		fmt.Fprintf(os.Stderr, "\nUsage: ./checkup [Options]\n\nOptions:\n")
 
 		flag.VisitAll(func(f *flag.Flag) {
-			fmt.Fprintf(os.Stderr, "   %-5s  %v\n", "-" + f.Name, f.Usage) // f.Name, f.Value
+			fmt.Fprintf(os.Stderr, "   %-5s  %v\n", "-"+f.Name, f.Usage) // f.Name, f.Value
 		})
 
 		fmt.Fprintf(os.Stderr, "\nMore Deetails: https://github.com/sbeliakou/check-up/\n\n")
@@ -556,8 +554,8 @@ func main() {
 		log.Fatal("Please specify -c or -C")
 	}
 
-	if len(regexp.MustCompile("^http(s)?:").FindStringSubmatch(*localConfig)) > 0 {
-		load(tmpFile, *localConfig)
+	if len(regexp.MustCompile("^http(s)?:").FindStringSubmatch(*remoteConfig)) > 0 {
+		load(tmpFile, *remoteConfig)
 		localConfig = &tmpFileName
 		log.Println("tmpFile:", tmpFile.Name())
 	}

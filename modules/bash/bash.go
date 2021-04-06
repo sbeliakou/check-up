@@ -80,7 +80,6 @@ function assert_success() {
 }
 
 function assert_failure() {
-	echo 'here'
   [ ${status:-0} -eq 0 ] && fail "RC Assertion Failed: ${status} == 0, but shouldn't be 0" || ok
 }
 
