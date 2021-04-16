@@ -436,7 +436,6 @@ func jUnitReportSave(reportFile string, c suitConfig) {
 		jut, _ := template.New("junit report").Funcs(funcMap).Parse(string(jUnit.JUnitTemplate))
 		jut.Execute(reportFile, T)
 	}
-	return
 }
 
 func jsonReportSave(reportFile string, c suitConfig) {
