@@ -5,7 +5,6 @@ import (
 	"flag"
 	"fmt"
 	"io"
-	"io/ioutil"
 	"log"
 	"net/http"
 	"os"
@@ -18,8 +17,8 @@ import (
 
 	"gopkg.in/yaml.v2"
 
-	"./modules/bash"
-	"./modules/jUnit"
+	"github.com/sbeliakou/check-up/modules/bash"
+	"github.com/sbeliakou/check-up/modules/jUnit"
 )
 
 var verbosity int = 0
@@ -83,10 +82,10 @@ func (s *ScenarioItem) RunBash() ([]byte, error) {
 	var err error = nil
 
 	if s.Script != "" {
-		tmpDir, _ := ioutil.TempDir("/var/tmp", "._")
+		tmpDir, _ := os.MkdirTemp("/var/tmp", "._")
 		defer os.RemoveAll(tmpDir)
 
-		tmpFile, _ := ioutil.TempFile(tmpDir, "tmp.*")
+		tmpFile, _ := os.CreateTemp(tmpDir, "tmp.*")
 
 		T := struct {
 			Script string
@@ -304,7 +303,7 @@ func (c *suitConfig) exec(item int) {
 }
 
 func (t *suitConfig) getConf(config string, taskFilter ...string) *suitConfig {
-	yamlFile, err := ioutil.ReadFile(config)
+	yamlFile, err := os.ReadFile(config)
 
 	if err != nil {
 		log.Fatal(err)
@@ -312,7 +311,7 @@ func (t *suitConfig) getConf(config string, taskFilter ...string) *suitConfig {
 
 	err = yaml.Unmarshal(yamlFile, t)
 	if err != nil {
-		log.Fatal(fmt.Sprintf("Cannot recognize configuration structure in %s file: ", config))
+		log.Fatalf(fmt.Sprintf("Cannot recognize configuration structure in %s file: ", config))
 	}
 
 	var envs map[string]string
@@ -352,13 +351,6 @@ func (t *suitConfig) getConf(config string, taskFilter ...string) *suitConfig {
 		if (*t).Cases[i].Name == "" {
 			(*t).Cases[i].canRun = true
 		}
-
-		// if (*t).Cases[i].Log != "" {
-		// 	logging := (*t).Cases[i].Log
-		// 	if logging == "True" || logging == "true" || logging == "Yes" || logging == "yes" {
-		// 		(*t).Cases[i].Log = "true"
-		// 	}
-		// }
 
 		if (*t).Cases[i].CanShow() {
 			if (*t).Cases[i].Weight == 0 {
@@ -490,12 +482,12 @@ func jsonReportSave(reportFile string, c suitConfig) {
 	}
 
 	reportJson, _ := json.MarshalIndent(jsonReportData, "", "  ")
-	ioutil.WriteFile(reportFile, reportJson, 0644)
+	os.WriteFile(reportFile, reportJson, 0644)
 }
 
 func main() {
-	localConfig := flag.String("c", "", "Local config path")
-	remoteConfig := flag.String("C", "", "Remote config url")
+	localConfig := flag.String("c", "", "Local config path (Required unless -C cpecified)")
+	remoteConfig := flag.String("C", "", "Remote config url (Required unless -c specified)")
 
 	filter := flag.String("f", "", "Run tests by regexp match")
 	wdir := flag.String("w", "", "Set working Dir")
@@ -504,12 +496,12 @@ func main() {
 	// -o json=...
 	reportFlag := flag.String("o", "", "JSON or JUnit report file")
 
-	// -v1 show description if it's set
-	// -v2 show failed outputs
-	// -v3 show failed and successful outputs
-	v1 := flag.Bool("v1", false, "Verbosity Mode 1")
-	v2 := flag.Bool("v2", false, "Verbosity Mode 2")
-	v3 := flag.Bool("v3", false, "Verbosity Mode 2")
+	// -v1 shows the description if it's set
+	// -v2 shows failed outputs
+	// -v3 shows failed and successful outputs
+	v1 := flag.Bool("v1", false, "Verbosity Mode 1: shows the description if it's set")
+	v2 := flag.Bool("v2", false, "Verbosity Mode 2: shows failed output")
+	v3 := flag.Bool("v3", false, "Verbosity Mode 3: shows failed and successful outputs")
 
 	flag.Usage = func() {
 		fmt.Fprintf(os.Stderr, "\nUsage: ./checkup [Options]\n\nOptions:\n")
@@ -518,10 +510,15 @@ func main() {
 			fmt.Fprintf(os.Stderr, "   %-5s  %v\n", "-"+f.Name, f.Usage) // f.Name, f.Value
 		})
 
-		fmt.Fprintf(os.Stderr, "\nMore Deetails: https://github.com/sbeliakou/check-up/\n\n")
+		fmt.Fprintf(os.Stderr, "\nYou need to specify either -c path_to_local_tests_file.yaml or -C url_to_remote_tests_file.yaml \n")
+		fmt.Fprintf(os.Stderr, "\nMore Details: https://github.com/sbeliakou/check-up/\n\n")
 	}
 
 	flag.Parse()
+	if len(os.Args) == 1 {
+		flag.Usage()
+		os.Exit(1)
+	}
 
 	report.parse(*reportFlag)
 
@@ -544,13 +541,13 @@ func main() {
 
 	workdir = *wdir
 
-	tmpDir, _ := ioutil.TempDir("/var/tmp", ".")
+	tmpDir, _ := os.MkdirTemp("/var/tmp", ".")
 	defer os.RemoveAll(tmpDir)
-	tmpFile, _ := ioutil.TempFile(tmpDir, "tmp.*")
+	tmpFile, _ := os.CreateTemp(tmpDir, "tmp.*")
 	tmpFileName := tmpFile.Name()
 
 	if *localConfig == "" && *remoteConfig == "" {
-		log.Fatal("Please specify -c or -C")
+		log.Fatal("Please specify -c path_to_local_tests_file.yaml or -C url_to_remote_tests_file.yaml")
 	}
 
 	if len(regexp.MustCompile("^http(s)?:").FindStringSubmatch(*remoteConfig)) > 0 {
