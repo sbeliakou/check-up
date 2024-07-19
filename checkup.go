@@ -36,6 +36,11 @@ func print(msg string) {
 
 }
 
+type LoopConfig struct {
+	Items   []string `yaml:"items"`
+	Command string   `yaml:"command"`
+}
+
 type ScenarioItem struct {
 	// YAML-Defined data
 	Name        string            `yaml:"name"`
@@ -53,6 +58,7 @@ type ScenarioItem struct {
 	Debug       string            `yaml:"debug"`
 	Before      []string          `yaml:"before"`
 	After       []string          `yaml:"after"`
+	Loop        LoopConfig        `yaml:"loop"`
 
 	// Runtime data
 	Status   string
@@ -62,7 +68,11 @@ type ScenarioItem struct {
 
 	canShow bool
 	canRun  bool
+
+	loopItem string
 }
+
+var loopItem string
 
 func (s *ScenarioItem) IsSuccessful() bool {
 	return s.Status == "success"
@@ -100,6 +110,12 @@ func (s *ScenarioItem) RunBash() ([]byte, error) {
 		script.Dir = workdir
 		script.Env = os.Environ()
 		for key, value := range s.GlobalEnv {
+			script.Env = append(script.Env,
+				fmt.Sprintf("%s=%s", key, value),
+			)
+		}
+
+		for key, value := range s.Env {
 			script.Env = append(script.Env,
 				fmt.Sprintf("%s=%s", key, value),
 			)
@@ -292,6 +308,19 @@ func (c *suitConfig) exec(item int) {
 			c.Cases[c.getIdByName(name)].RunBash()
 		}
 
+		// if len(testCase.Loop.Items) > 0 {
+		// 	for _, item := range testCase.Loop.Items {
+		// 		testCase.loopItem = item
+		// 		testCase.RunBash()
+		// 		// log.Println(item)
+		// 	}
+		// } else {
+		// 	testCase.loopItem = ""
+		// 	testCase.RunBash()
+		// }
+
+		// testCase.RunBash()
+
 		testCase.RunBash()
 
 		for _, name := range testCase.After {
@@ -318,6 +347,11 @@ func (t *suitConfig) getConf(config string, taskFilter ...string) *suitConfig {
 	wdir, _ := os.Getwd()
 	if workdir != "" {
 		wdir = workdir
+	}
+
+	a := &suitConfig{
+		Name:  (*t).Name,
+		Cases: []ScenarioItem{},
 	}
 
 	for i := 0; i < len((*t).Cases); i++ {
@@ -357,7 +391,42 @@ func (t *suitConfig) getConf(config string, taskFilter ...string) *suitConfig {
 				(*t).Cases[i].Weight = 1
 			}
 		}
+
+		if len((*t).Cases[i].Loop.Items) > 0 || len((*t).Cases[i].Loop.Command) > 0 {
+			Items := []string{}
+
+			if len((*t).Cases[i].Loop.Items) > 0 {
+				Items = (*t).Cases[i].Loop.Items
+			}
+
+			if len((*t).Cases[i].Loop.Command) > 0 {
+				s := (*t).Cases[i]
+				s.Script = s.Loop.Command
+				stdout, _ := s.RunBash()
+
+				for _, item := range strings.Split(string(stdout), "\n") {
+					if item != "" {
+						Items = append(Items, item)
+					}
+				}
+			}
+
+			for _, item := range Items {
+				last := len(a.Cases)
+				(*a).Cases = append(a.Cases, (*t).Cases[i])
+				(*a).Cases[last].Case = fmt.Sprintf("%s, item => \"%s\"", (*t).Cases[i].Case, item)
+				if (*a).Cases[last].GlobalEnv == nil {
+					(*a).Cases[last].GlobalEnv = make(map[string]string)
+				}
+				(*a).Cases[last].GlobalEnv["item"] = item
+			}
+
+		} else {
+			(*a).Cases = append(a.Cases, (*t).Cases[i])
+		}
+
 	}
+	*t = *a
 	return t
 }
 
