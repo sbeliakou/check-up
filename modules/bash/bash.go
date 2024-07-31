@@ -1,5 +1,11 @@
 package bash
 
+import (
+	"os"
+	"os/exec"
+	"text/template"
+)
+
 const BashScript = `#!/usr/bin/env bash
 set -e
 
@@ -108,3 +114,32 @@ function assert_output() {
 {{ .Script }}
 exit ${status:-0}
 `
+
+func RunBashScript(command string, workdir string, env []string) ([]byte, error) {
+	var stdout []byte = []byte("")
+	var err error = nil
+
+	if command != "" {
+		tmpDir, _ := os.MkdirTemp("/var/tmp", "._")
+		defer os.RemoveAll(tmpDir)
+
+		tmpFile, _ := os.CreateTemp(tmpDir, "tmp.*")
+
+		T := struct {
+			Script string
+		}{
+			Script: command,
+		}
+
+		tmpl, _ := template.New("bash-script").Parse(string(BashScript))
+		tmpl.Execute(tmpFile, T)
+
+		script := exec.Command("/bin/bash", tmpFile.Name())
+		script.Dir = workdir
+		script.Env = env
+
+		stdout, err = script.CombinedOutput()
+		return stdout, err
+	}
+	return []byte(""), nil
+}

@@ -8,7 +8,7 @@ import (
 	"log"
 	"net/http"
 	"os"
-	"os/exec"
+	"path/filepath"
 	"regexp"
 	"strconv"
 	"strings"
@@ -21,7 +21,6 @@ import (
 	"github.com/sbeliakou/check-up/modules/jUnit"
 )
 
-var verbosity int = 0
 var workdir string = ""
 
 func print(msg string) {
@@ -55,10 +54,14 @@ type ScenarioItem struct {
 	Weight      int               `yaml:"weight"`
 	Log         string            `yaml:"log"`
 	Fatal       bool              `yaml:"fatal"`
-	Debug       string            `yaml:"debug"`
 	Before      []string          `yaml:"before"`
 	After       []string          `yaml:"after"`
 	Loop        LoopConfig        `yaml:"loop"`
+
+	Debug       string `yaml:"debug"`
+	DebugScript string `yaml:"debug_script"`
+	DebugStdout string
+	DebugResult error
 
 	// Runtime data
 	Status   string
@@ -68,11 +71,7 @@ type ScenarioItem struct {
 
 	canShow bool
 	canRun  bool
-
-	loopItem string
 }
-
-var loopItem string
 
 func (s *ScenarioItem) IsSuccessful() bool {
 	return s.Status == "success"
@@ -88,57 +87,42 @@ func (s *ScenarioItem) CanShow() bool {
 }
 
 func (s *ScenarioItem) RunBash() ([]byte, error) {
-	var stdout []byte = []byte("")
-	var err error = nil
-
-	if s.Script != "" {
-		tmpDir, _ := os.MkdirTemp("/var/tmp", "._")
-		defer os.RemoveAll(tmpDir)
-
-		tmpFile, _ := os.CreateTemp(tmpDir, "tmp.*")
-
-		T := struct {
-			Script string
-		}{
-			Script: s.Script,
-		}
-
-		tmpl, _ := template.New("bash-script").Parse(string(bash.BashScript))
-		tmpl.Execute(tmpFile, T)
-
-		script := exec.Command("/bin/bash", tmpFile.Name())
-		script.Dir = workdir
-		script.Env = os.Environ()
-		for key, value := range s.GlobalEnv {
-			script.Env = append(script.Env,
-				fmt.Sprintf("%s=%s", key, value),
-			)
-		}
-
-		for key, value := range s.Env {
-			script.Env = append(script.Env,
-				fmt.Sprintf("%s=%s", key, value),
-			)
-		}
-
-		stdout, err = script.CombinedOutput()
-		s.Stdout = strings.TrimSpace(string(stdout))
-		s.Result = err
-
-		if err == nil {
-			s.Status = "success"
-		} else {
-			s.Status = "failed"
-		}
-
-		return stdout, err
+	var env []string = os.Environ()
+	for key, value := range s.GlobalEnv {
+		env = append(env,
+			fmt.Sprintf("%s=%s", key, value),
+		)
 	}
-	return []byte(""), nil
+
+	for key, value := range s.Env {
+		env = append(env,
+			fmt.Sprintf("%s=%s", key, value),
+		)
+	}
+
+	stdout, err := bash.RunBashScript(s.Script, workdir, env)
+	s.Stdout = strings.TrimSpace(string(stdout))
+	s.Result = err
+
+	if err == nil {
+		s.Status = "success"
+	} else {
+		s.Status = "failed"
+
+		if s.DebugScript != "" {
+			debug_stdout, debug_err := bash.RunBashScript(s.DebugScript, workdir, env)
+			s.DebugStdout = strings.TrimSpace(string(debug_stdout))
+			s.DebugResult = debug_err
+		}
+	}
+
+	return stdout, err
 }
 
 type suitConfig struct {
-	Name  string         `yaml:"name"`
-	Cases []ScenarioItem `yaml:"cases"`
+	Name     string         `yaml:"name"`
+	FileName string         `yaml:"filename"`
+	Cases    []ScenarioItem `yaml:"cases"`
 
 	startTime time.Time
 	endTime   time.Time
@@ -162,6 +146,7 @@ func (c *suitConfig) getScenarioIds() []int {
 			result = append(result, i)
 		}
 	}
+
 	return result
 }
 
@@ -172,6 +157,7 @@ func (c *suitConfig) getScenarioCount() int {
 			result++
 		}
 	}
+
 	return result
 }
 
@@ -186,22 +172,20 @@ func (c *suitConfig) getIdByName(name string) int {
 
 func (c *suitConfig) printHeader() {
 	scenariosCount := c.getScenarioCount()
+	filename := ""
+	if c.FileName != "" {
+		filename = fmt.Sprintf(", file: %s", c.FileName)
+	}
 
 	c.startTime = time.Now()
 
-	if scenariosCount > 1 {
-		log.Printf("[ %s ], 1..%d tests\n", c.Name, scenariosCount)
-		return
-	}
-
-	if scenariosCount == 1 {
-		log.Printf("[ %s ], 1 test\n", c.Name)
-		return
-	}
-
-	if scenariosCount == 0 {
-		log.Printf("[ %s ], no tests to run\n", c.Name)
-		return
+	switch {
+	case scenariosCount > 1:
+		log.Printf("[ %s ], 1..%d tests%s\n", c.Name, scenariosCount, filename)
+	case scenariosCount == 1:
+		log.Printf("[ %s ], 1 test%s\n", c.Name, filename)
+	case scenariosCount == 0:
+		log.Printf("[ %s ], no tests to run%s\n", c.Name, filename)
 	}
 }
 
@@ -241,6 +225,24 @@ func (c *suitConfig) printSummary() {
 			print(fmt.Sprintf("\033[32m%d (of %d) tests passed, %d tests failed, rated as %.2f%%, spent %s\033[0m", c.successfull, c.all, c.failed, c.score, c.duration))
 		}
 	}
+	print("")
+}
+
+func printOutTaskResultDetails(indent int, std string, text ...string) {
+	indent_str1 := strings.Repeat(" ", indent)
+	indent_str2 := strings.Repeat(" ", indent+2)
+
+	if len(text) > 0 {
+		txt := strings.TrimSpace(text[0])
+		if txt == "" {
+			log.Printf(indent_str1+"- %s: \"\" (null)\n", std)
+			return
+		}
+
+		log.Printf(indent_str1+"- %s: >\n%s\n", std, regexp.MustCompile(`\n`).ReplaceAllString(indent_str2+"  "+txt, "\n  "+indent_str2))
+	} else {
+		log.Printf(indent_str1+"%s\n", std)
+	}
 }
 
 func (c *suitConfig) printTestStatus(id int, asId ...int) {
@@ -254,44 +256,76 @@ func (c *suitConfig) printTestStatus(id int, asId ...int) {
 		if j == id {
 			if testCase.CanShow() {
 				if testCase.IsSuccessful() {
-					print(fmt.Sprintf("\033[32m✓ %2d  %s, %s\033[0m", i, testCase.Case, testCase.Duration))
+					print(fmt.Sprintf("\033[32m✓ %2d/%d  %s, %s\033[0m", i, c.getScenarioCount(), testCase.Case, testCase.Duration))
 				} else {
-					print(fmt.Sprintf("\033[31m✗ %2d  %s, %s\033[0m", i, testCase.Case, testCase.Duration))
+					print(fmt.Sprintf("\033[31m✗ %2d/%d  %s, %s\033[0m", i, c.getScenarioCount(), testCase.Case, testCase.Duration))
 				}
 
 				if (verbosity > 1 && testCase.IsFailed()) || (verbosity > 2) {
-					for _, name := range testCase.Before {
-						log.Printf("(run: %s)\n", name)
-						log.Printf(">> script:\n%s\n", strings.TrimSpace(c.Cases[c.getIdByName(name)].Script))
-						log.Printf(">> stdout:\n%s\n", c.Cases[c.getIdByName(name)].Stdout)
-						if c.Cases[c.getIdByName(name)].Result == nil {
-							log.Printf(">> exit status 0 (successfull)")
-						} else {
-							log.Printf(">> %s (failure)", c.Cases[c.getIdByName(name)].Result)
-						}
-						log.Printf("---")
+					if len(testCase.Before) > 0 {
+						printOutTaskResultDetails(3, "pre-tasks:")
 					}
 
-					log.Printf("~~~~~")
-					log.Printf(">> stdout:\n%s", strings.TrimSpace(testCase.Stdout))
-					if testCase.Result == nil {
-						log.Printf(">> exit status 0 (successfull)")
-					} else {
-						log.Printf(">> %s (failure)", testCase.Result)
+					for _, name := range testCase.Before {
+						printOutTaskResultDetails(5, "- name: "+name)
+						printOutTaskResultDetails(7, "script", c.Cases[c.getIdByName(name)].Script)
+						printOutTaskResultDetails(7, "stdout", c.Cases[c.getIdByName(name)].Stdout)
+
+						if c.Cases[c.getIdByName(name)].Result == nil {
+							printOutTaskResultDetails(7, "- exit status: 0 (\033[32msuccess\033[0m)")
+						} else {
+							printOutTaskResultDetails(7, strings.Replace(fmt.Sprintf("- %s (\033[31mfail\033[0m)", c.Cases[c.getIdByName(name)].Result), "exit status", "exit status:", 1))
+						}
 					}
-					log.Printf("~~~~~")
+					if len(testCase.Before) > 0 {
+						printOutTaskResultDetails(5, "")
+					}
+
+					printOutTaskResultDetails(3, "main task:")
+					printOutTaskResultDetails(5, "script", testCase.Script)
+					printOutTaskResultDetails(5, "stdout", testCase.Stdout)
+
+					if testCase.Result == nil {
+						printOutTaskResultDetails(5, "- exit status: 0 (\033[32msuccess\033[0m)")
+					} else {
+						printOutTaskResultDetails(5, strings.Replace(fmt.Sprintf("- %s (\033[31mfail\033[0m)", testCase.Result), "exit status ", "exit status: ", 1))
+
+						if verbosity >= 3 {
+							printOutTaskResultDetails(4, "")
+							if testCase.DebugScript != "" {
+								printOutTaskResultDetails(3, "debug_script:")
+								printOutTaskResultDetails(5, "script", testCase.DebugScript)
+								printOutTaskResultDetails(5, "stdout", testCase.DebugStdout)
+
+								if testCase.DebugResult == nil {
+									printOutTaskResultDetails(5, "- exit status: 0")
+								} else {
+									printOutTaskResultDetails(5, strings.Replace(fmt.Sprintf("- %s", testCase.DebugResult), "exit status ", "exit status: ", 1))
+								}
+							} else {
+								printOutTaskResultDetails(3, "debug_script: \"\" (null)")
+							}
+						}
+					}
+
+					if len(testCase.After) > 0 {
+						printOutTaskResultDetails(4, "")
+						printOutTaskResultDetails(3, "post-tasks:")
+					}
 
 					for _, name := range testCase.After {
-						log.Printf("(run: %s)\n", name)
-						log.Printf(">> script:\n%s\n", strings.TrimSpace(c.Cases[c.getIdByName(name)].Script))
-						log.Printf(">> stdout:\n%s\n", c.Cases[c.getIdByName(name)].Stdout)
+						printOutTaskResultDetails(5, "- name: "+name)
+						printOutTaskResultDetails(7, "script", c.Cases[c.getIdByName(name)].Script)
+						printOutTaskResultDetails(7, "stdout", c.Cases[c.getIdByName(name)].Stdout)
+
 						if c.Cases[c.getIdByName(name)].Result == nil {
-							log.Printf(">> exit status 0 (successfull)")
+							printOutTaskResultDetails(7, "- exit status: 0 (\033[32msuccess\033[0m)")
 						} else {
-							log.Printf(">> %s (failure)", c.Cases[c.getIdByName(name)].Result)
+							printOutTaskResultDetails(7, strings.Replace(fmt.Sprintf("- %s (\033[31mfail\033[0m)", c.Cases[c.getIdByName(name)].Result), "exit status ", "exit status: ", 1))
 						}
-						log.Printf("---")
 					}
+
+					log.Println()
 				}
 			}
 			return
@@ -299,7 +333,7 @@ func (c *suitConfig) printTestStatus(id int, asId ...int) {
 	}
 }
 
-func (c *suitConfig) exec(item int) {
+func (c *suitConfig) execTask(item int) {
 	testCase := &c.Cases[item]
 	if testCase.Script != "" {
 		taskStartTime := time.Now()
@@ -307,19 +341,6 @@ func (c *suitConfig) exec(item int) {
 		for _, name := range testCase.Before {
 			c.Cases[c.getIdByName(name)].RunBash()
 		}
-
-		// if len(testCase.Loop.Items) > 0 {
-		// 	for _, item := range testCase.Loop.Items {
-		// 		testCase.loopItem = item
-		// 		testCase.RunBash()
-		// 		// log.Println(item)
-		// 	}
-		// } else {
-		// 	testCase.loopItem = ""
-		// 	testCase.RunBash()
-		// }
-
-		// testCase.RunBash()
 
 		testCase.RunBash()
 
@@ -500,7 +521,6 @@ func jUnitReportSave(reportFile string, c suitConfig) {
 }
 
 func jsonReportSave(reportFile string, c suitConfig) {
-
 	type TestData struct {
 		Name     string `json:"name"`
 		Status   bool   `json:"status"`
@@ -554,100 +574,154 @@ func jsonReportSave(reportFile string, c suitConfig) {
 	os.WriteFile(reportFile, reportJson, 0644)
 }
 
+var (
+	localConfig  = flag.String("c", "", "Local tests case file path (Required unless -C cpecified)")
+	remoteConfig = flag.String("C", "", "Remote tests case file url (Required unless -c specified)")
+	filter       = flag.String("f", "", "Run tests by name regexp match")
+	wdir         = flag.String("w", "", "Set working Dir")
+	reportFlag   = flag.String("o", "", "JSON or JUnit report file")
+)
+
+var verbosity int = 0
+
+func customUsage() {
+	fmt.Fprintf(flag.CommandLine.Output(), "Usage of ./%s:\n", filepath.Base(os.Args[0]))
+	flag.PrintDefaults()
+	fmt.Println("  -vX")
+	fmt.Println("        Verbosity level. Can be:")
+	fmt.Println("          -v (-v1, --verbosity=1),")
+	fmt.Println("          -vv (-v2, --verbosity=2),")
+	fmt.Println("          -vvv (-v3, --verbosity=3)")
+	fmt.Println("\nMore details: https://github.com/sbeliakou/check-up/")
+}
+
+func listFiles(path string) []string {
+	f, _ := os.Stat(path)
+	if f.IsDir() {
+		path = fmt.Sprintf("%s/*.yml", path)
+	}
+
+	files, _ := filepath.Glob(path)
+	result := []string{""}
+
+	for _, file := range files {
+		f, _ := os.Stat(file)
+		if !f.IsDir() {
+			if len(file) > 0 {
+				result = append(result, file)
+			}
+		} else {
+			result = append(result, listFiles(file)...)
+		}
+	}
+	return result
+}
+
 func main() {
-	localConfig := flag.String("c", "", "Local config path (Required unless -C cpecified)")
-	remoteConfig := flag.String("C", "", "Remote config url (Required unless -c specified)")
-
-	filter := flag.String("f", "", "Run tests by regexp match")
-	wdir := flag.String("w", "", "Set working Dir")
-
-	// -o junit=...
-	// -o json=...
-	reportFlag := flag.String("o", "", "JSON or JUnit report file")
-
-	// -v1 shows the description if it's set
-	// -v2 shows failed outputs
-	// -v3 shows failed and successful outputs
-	v1 := flag.Bool("v1", false, "Verbosity Mode 1: shows the description if it's set")
-	v2 := flag.Bool("v2", false, "Verbosity Mode 2: shows failed output")
-	v3 := flag.Bool("v3", false, "Verbosity Mode 3: shows failed and successful outputs")
-
-	flag.Usage = func() {
-		fmt.Fprintf(os.Stderr, "\nUsage: ./checkup [Options]\n\nOptions:\n")
-
-		flag.VisitAll(func(f *flag.Flag) {
-			fmt.Fprintf(os.Stderr, "   %-5s  %v\n", "-"+f.Name, f.Usage) // f.Name, f.Value
-		})
-
-		fmt.Fprintf(os.Stderr, "\nYou need to specify either -c path_to_local_tests_file.yaml or -C url_to_remote_tests_file.yaml \n")
-		fmt.Fprintf(os.Stderr, "\nMore Details: https://github.com/sbeliakou/check-up/\n\n")
+	// Modified Args slice
+	args := os.Args[:1] // keep the program name
+	verbosity = 0
+	verbosityRegexp := regexp.MustCompile(`^-v(v+)?=?(\d+)?$|^--verbosity=(\d+)$`)
+	for _, arg := range os.Args[1:] {
+		matches := verbosityRegexp.FindStringSubmatch(arg)
+		if len(matches) > 0 {
+			if matches[1] != "" { // Handle -vv, -vvv (matches multiple 'v' after the first)
+				verbosity = len(matches[1]) + 1 // +1 because the first 'v' wasn't counted in matches[1]
+			} else if matches[2] != "" { // Handle -v=2, -v=3, etc.
+				verbosity, _ = strconv.Atoi(matches[2])
+			} else if matches[3] != "" { // Handle --verbosity=2, --verbosity=3, etc.
+				verbosity, _ = strconv.Atoi(matches[3])
+			}
+		} else {
+			args = append(args, arg) // include other args to be parsed by flag package
+		}
 	}
 
+	os.Args = args
+
+	flag.Usage = customUsage
 	flag.Parse()
-	if len(os.Args) == 1 {
-		flag.Usage()
-		os.Exit(1)
-	}
-
-	report.parse(*reportFlag)
-
-	// Set Log Level
-	// https://golang.org/pkg/log/#example_Logger
-	log.SetFlags(0)
-
-	verbosity = func() int {
-		if *v1 {
-			return 1
-		}
-		if *v2 {
-			return 2
-		}
-		if *v3 {
-			return 3
-		}
-		return 0
-	}()
 
 	workdir = *wdir
 
-	tmpDir, _ := os.MkdirTemp("/var/tmp", ".")
-	defer os.RemoveAll(tmpDir)
-	tmpFile, _ := os.CreateTemp(tmpDir, "tmp.*")
-	tmpFileName := tmpFile.Name()
+	report.parse(*reportFlag)
 
-	if *localConfig == "" && *remoteConfig == "" {
-		log.Fatal("Please specify -c path_to_local_tests_file.yaml or -C url_to_remote_tests_file.yaml")
-	}
+	log.SetFlags(0)
 
-	if len(regexp.MustCompile("^http(s)?:").FindStringSubmatch(*remoteConfig)) > 0 {
-		load(tmpFile, *remoteConfig)
-		localConfig = &tmpFileName
-		log.Println("tmpFile:", tmpFile.Name())
-	}
-
-	var c suitConfig
-	c.getConf(*localConfig, *filter)
-
-	c.printHeader()
-	if c.getScenarioCount() > 0 {
-		print("-----------------------------------------------------------------------------------")
-		i := 1
-		for _, id := range c.getScenarioIds() {
-			c.exec(id)
-			if c.Cases[id].CanShow() {
-				c.printTestStatus(id, i)
-				i++
+	d := []suitConfig{}
+	if *localConfig != "" {
+		for _, file := range listFiles(*localConfig) {
+			if len(file) > 0 {
+				d = append(d, *(&suitConfig{}).getConf(file, *filter))
+				cwdir, _ := os.Getwd()
+				d[len(d)-1].FileName = strings.Replace(file, cwdir, ".", 1)
 			}
 		}
-		print("-----------------------------------------------------------------------------------")
+	}
+
+	if *remoteConfig != "" {
+		tmpDir, err := os.MkdirTemp("/var/tmp", ".")
+		if err != nil {
+			log.Fatalf("Failed to create a temporary directory: %v", err)
+		}
+		defer os.RemoveAll(tmpDir)
+
+		tmpFile, err := os.CreateTemp(tmpDir, "tmp.*")
+		if err != nil {
+			log.Fatalf("Failed to create a temporary file: %v", err)
+		}
+		defer tmpFile.Close()
+
+		if matched, _ := regexp.MatchString("^http(s)?://", *remoteConfig); matched {
+			load(tmpFile, *remoteConfig)
+			*localConfig = tmpFile.Name()
+			log.Println("Using temporary file for configuration:", tmpFile.Name())
+		}
+
+		d = append(d, *(&suitConfig{}).getConf(*localConfig, *filter))
+	}
+
+	if len(d) > 0 {
+		for _, c := range d {
+			handleScenarios(&c)
+			handleReports(&c)
+		}
+	} else {
+		flag.Usage()
+		log.Fatal("Missing required flags: either -c or -C must be specified.")
+	}
+}
+
+func handleScenarios(c *suitConfig) {
+	c.printHeader()
+	if c.getScenarioCount() > 0 {
+		max := 30
+		for i, id := range c.getScenarioIds() {
+			task_title := fmt.Sprintf("   %d/%d  %s", i, c.getScenarioCount(), c.Cases[id].Case)
+			if max < len(task_title) {
+				max = len(task_title)
+			}
+		}
+
+		fmt.Println(strings.Repeat("-", max+7))
+		for i, id := range c.getScenarioIds() {
+			c.execTask(id)
+			if c.Cases[id].CanShow() {
+				c.printTestStatus(id, i+1)
+			}
+		}
+
+		fmt.Println(strings.Repeat("-", max+7))
 	}
 	c.signOff()
 	c.printSummary()
+}
 
+func handleReports(c *suitConfig) {
 	switch report.format {
 	case "junit":
-		jUnitReportSave(report.fileName, c)
+		jUnitReportSave(report.fileName, *c)
 	case "json":
-		jsonReportSave(report.fileName, c)
+		jsonReportSave(report.fileName, *c)
 	}
 }

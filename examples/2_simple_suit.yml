@@ -4,23 +4,23 @@ cases:
 - script: >
     docker run -d --name test-server --volume $(pwd):$(pwd) --workdir $(pwd) --privileged quay.io/sbeliakou/ansible-training:centos
 
-- case: Should finish successfully
+- case: Creating test-user in test container
   script: |
-    run docker exec test-server bash ./create_user.sh test-user
+    run docker exec test-server useradd test-user
     assert_success
 
-- case: Should create "test-user"
+- case: Check if test-user exists
   script: |
     run docker exec test-server id test-user
     assert_success
 
 # Obviously, it shouldn't, but let's check
-- case: Should create "unwilling-user"
+- case: Check if "unwilling-user" exists
   script: |
     run docker exec test-server id unwilling-user
     assert_success
 
-- case: Shouldn't create "unwilling-user"
+- case: Creating "unwilling-user"
   script: |
     run docker exec test-server id unwilling-user
     assert_failure

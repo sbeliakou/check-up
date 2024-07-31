@@ -1,12 +1,15 @@
 name: Using Before and After
 cases:
 
+# silent task, just for doing some usefull stuff
 - name: run contianer 1
   script: docker run --name test1 -d centos:7 sleep infinity
 
+# silent task, just for doing some usefull stuff
 - name: run contianer 2
   script: docker run --name test -d centos:7 sleep infinity
 
+# silent task, just for doing some usefull stuff
 - name: remove containers
   script: docker rm -f $(docker ps -q)
 
@@ -17,6 +20,8 @@ cases:
   script: |
     docker ps
     docker run --name test -d centos:7 sleep infinity
+  debug_script: |
+    docker ps -a | grep test
   before:
     - remove containers
     - run contianer 1
@@ -24,5 +29,11 @@ cases:
   after:
     - remove containers
 
-- case: check /tmp is created
-  script: test -d /tmp
+# it creates /tmp/123 folder, next run it will fail but has no impact on the main task result
+- name: create /tmp/123 foldder
+  script: mkdir /tmp/123
+
+- case: check /tmp/123 is created
+  script: test -d /tmp/123
+  before:
+    - create /tmp/123 foldder

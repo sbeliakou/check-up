@@ -8,6 +8,8 @@ cases:
   script: |
     run command args
     assert_succes
+  debug_script: |
+    env
 
 - case: expecting command fails (the same as above, bats way)
   script: |
