@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"encoding/json"
 	"flag"
 	"fmt"
@@ -18,9 +19,11 @@ import (
 	"gopkg.in/yaml.v2"
 
 	"github.com/sbeliakou/check-up/modules/bash"
+	"github.com/sbeliakou/check-up/modules/helper"
 	"github.com/sbeliakou/check-up/modules/jUnit"
 )
 
+var version string = "v0.2.5"
 var workdir string = ""
 
 func print(msg string) {
@@ -57,28 +60,36 @@ type ScenarioItem struct {
 	Before      []string          `yaml:"before"`
 	After       []string          `yaml:"after"`
 	Loop        LoopConfig        `yaml:"loop"`
+	Timeout     int               `yaml:"timeout"`
 
-	Debug       string `yaml:"debug"`
-	DebugScript string `yaml:"debug_script"`
-	DebugStdout string
-	DebugResult error
+	Debug struct {
+		Script  string `yaml:"debug_script"`
+		Timeout int    `yaml:"timeout"`
+		stdout  string
+		result  error
+	} `yaml:"debug"`
 
 	// Runtime data
-	Status   string
-	Result   error
-	Stdout   string
-	Duration string
+	status               string
+	result               error
+	stdout               string
+	durationString       string
+	durationMilliSeconds int
 
 	canShow bool
 	canRun  bool
+
+	env []string
+
+	skipReason string
 }
 
 func (s *ScenarioItem) IsSuccessful() bool {
-	return s.Status == "success"
+	return s.status == "success"
 }
 
 func (s *ScenarioItem) IsFailed() bool {
-	return s.Status == "failed"
+	return s.status == "failed"
 }
 
 func (s *ScenarioItem) CanShow() bool {
@@ -100,19 +111,21 @@ func (s *ScenarioItem) RunBash() ([]byte, error) {
 		)
 	}
 
-	stdout, err := bash.RunBashScript(s.Script, workdir, env)
-	s.Stdout = strings.TrimSpace(string(stdout))
-	s.Result = err
+	s.env = env
+
+	stdout, err := bash.RunBashScript(s.Script, workdir, s.Timeout, env)
+	s.stdout = strings.TrimSpace(string(stdout))
+	s.result = err
 
 	if err == nil {
-		s.Status = "success"
+		s.status = "success"
 	} else {
-		s.Status = "failed"
+		s.status = "failed"
 
-		if s.DebugScript != "" {
-			debug_stdout, debug_err := bash.RunBashScript(s.DebugScript, workdir, env)
-			s.DebugStdout = strings.TrimSpace(string(debug_stdout))
-			s.DebugResult = debug_err
+		if s.Debug.Script != "" {
+			debugStdout, debugErr := bash.RunBashScript(s.Debug.Script, workdir, s.Debug.Timeout, env)
+			s.Debug.stdout = strings.TrimSpace(string(debugStdout))
+			s.Debug.result = debugErr
 		}
 	}
 
@@ -120,27 +133,30 @@ func (s *ScenarioItem) RunBash() ([]byte, error) {
 }
 
 type suitConfig struct {
-	Name     string         `yaml:"name"`
-	FileName string         `yaml:"filename"`
-	Cases    []ScenarioItem `yaml:"cases"`
+	Name        string         `yaml:"name"`
+	FileName    string         `yaml:"filename"`
+	Cases       []ScenarioItem `yaml:"cases"`
+	CustomIndex string         `yaml:"custom_index"`
 
 	startTime time.Time
 	endTime   time.Time
 
-	all         int
-	successfull int
-	failed      int
-	score       float64
-	duration    string
+	all                  int
+	successfull          int
+	skipped              int
+	failed               int
+	score                float64
+	durationString       string
+	durationMilliSeconds int
 }
 
 func (c *suitConfig) getScenarioIds() []int {
 	result := []int{}
 
 	for i := 0; i < len(c.Cases); i++ {
-		if c.Cases[i].Skip {
-			continue
-		}
+		// if c.Cases[i].Skip {
+		// 	continue
+		// }
 
 		if c.Cases[i].canShow || c.Cases[i].canRun {
 			result = append(result, i)
@@ -194,6 +210,7 @@ func (c *suitConfig) signOff() {
 
 	sum := 0
 	max := 0
+	skipped := 0
 	failed := 0
 	all := 0
 
@@ -201,131 +218,237 @@ func (c *suitConfig) signOff() {
 		item := c.Cases[i]
 		if item.CanShow() {
 			all++
-			max += item.Weight
-			if item.IsSuccessful() {
-				sum += item.Weight
+			if item.Skip {
+				skipped++
 			} else {
-				failed++
+				max += item.Weight
+				if item.IsSuccessful() {
+					sum += item.Weight
+				} else {
+					failed++
+				}
 			}
 		}
 	}
 
-	c.successfull = all - failed
+	c.successfull = all - skipped - failed
+	c.skipped = skipped
 	c.failed = failed
 	c.all = all
 	c.score = 100 * float64(sum) / float64(max)
-	c.duration = duration(c.startTime, c.endTime)
+	c.durationString, c.durationMilliSeconds = duration(c.startTime, c.endTime)
 }
 
 func (c *suitConfig) printSummary() {
 	if c.all > 0 {
+		failed := fmt.Sprintf("%d tests failed", c.failed)
 		if c.failed > 0 {
-			print(fmt.Sprintf("%d (of %d) tests passed, \033[31m%d tests failed,\033[0m rated as %.2f%%, spent %s", c.successfull, c.all, c.failed, c.score, c.duration))
+			failed = fmt.Sprintf("\033[31m%s\033[0m", failed)
+		}
+
+		skipped := fmt.Sprintf("%d tests skipped", c.skipped)
+		if c.skipped > 0 {
+			skipped = fmt.Sprintf("\033[36m%s\033[0m", skipped)
+		}
+
+		if c.failed > 0 {
+			print(fmt.Sprintf("%d (of %d) tests passed, %s, %s, rated as %.2f%%, spent %s", c.successfull, c.all, failed, skipped, c.score, c.durationString))
 		} else {
-			print(fmt.Sprintf("\033[32m%d (of %d) tests passed, %d tests failed, rated as %.2f%%, spent %s\033[0m", c.successfull, c.all, c.failed, c.score, c.duration))
+			print(fmt.Sprintf("\033[32m%d (of %d) tests passed, %s, %s, rated as %.2f%%, spent %s\033[0m", c.successfull, c.all, failed, skipped, c.score, c.durationString))
 		}
 	}
+
 	print("")
 }
 
-func printOutTaskResultDetails(indent int, std string, text ...string) {
-	indent_str1 := strings.Repeat(" ", indent)
-	indent_str2 := strings.Repeat(" ", indent+2)
+type taskScriptDetails struct {
+	Name    string
+	Script  string
+	Stdout  string
+	Result  error
+	Timeout int
+	Env     []string
+}
 
-	if len(text) > 0 {
-		txt := strings.TrimSpace(text[0])
-		if txt == "" {
-			log.Printf(indent_str1+"- %s: \"\" (null)\n", std)
-			return
+func printOut(b string, t []taskScriptDetails, indent ...int) {
+	indentStr := "     "
+	log.Println(indentStr[2:] + b)
+
+	if len(indent) > 0 {
+		indentStr = indentStr + strings.Repeat(" ", indent[0])
+	}
+
+	for _, item := range t {
+		if item.Name != "" {
+			log.Printf(indentStr[2:]+"%s", item.Name)
 		}
 
-		log.Printf(indent_str1+"- %s: >\n%s\n", std, regexp.MustCompile(`\n`).ReplaceAllString(indent_str2+"  "+txt, "\n  "+indent_str2))
-	} else {
-		log.Printf(indent_str1+"%s\n", std)
+		log.Println(indentStr + "script: >\n  " + indentStr + regexp.MustCompile(`\n`).ReplaceAllString(item.Script, "\n  "+indentStr))
+
+		if len(item.Stdout) == 0 {
+			log.Println(indentStr + "stdout: \"\" (output is empty)")
+		} else {
+			log.Println(indentStr + "stdout: >\n  " + indentStr + regexp.MustCompile(`\n`).ReplaceAllString(item.Stdout, "\n  "+indentStr))
+		}
+
+		if item.Timeout != 0 {
+			log.Printf(indentStr+"timeout: %d sec", item.Timeout)
+		}
+
+		exitCodeInt := 0
+		if item.Result != nil {
+			exitCodeInt, _ = strconv.Atoi(regexp.MustCompile(`exit status (\d+)`).FindStringSubmatch(item.Result.Error())[1])
+		}
+
+		color := "\033[31m"
+		if exitCodeInt == 0 {
+			color = "\033[32m"
+		}
+		log.Printf(indentStr+"exit code: %d (%s%s\033[0m)", exitCodeInt, color, bash.ExplainExitCode(exitCodeInt))
+
+		if len(item.Env) > 0 {
+			log.Println(indentStr + "environment:")
+			for _, v := range item.Env {
+				log.Println(indentStr + "  " + v)
+			}
+		}
+
+		log.Println()
+	}
+
+	if len(t) == 0 {
+		log.Println()
 	}
 }
 
 func (c *suitConfig) printTestStatus(id int, asId ...int) {
 	testCase := c.Cases[id]
+	status, color := "✗", "\033[31m" // Assume failure
+
+	if testCase.IsSuccessful() {
+		status, color = "✓", "\033[32m"
+	}
+
+	if testCase.Skip {
+		status, color = "-", "\033[36m"
+	}
+
 	i := id
 	if len(asId) > 0 {
 		i = asId[0]
 	}
 
+	caseStatusMsg := ""
+	if c.CustomIndex != "" {
+		dataFuncMap := template.FuncMap{
+			"add": func(x, y int) int { return x + y },
+		}
+
+		data := map[string]interface{}{
+			"TaskId":    i - 1,
+			"TaskCount": c.getScenarioCount(),
+		}
+
+		tmpl, err := template.New("custom_index").Funcs(dataFuncMap).Parse(c.CustomIndex)
+		if err != nil {
+			panic(err)
+		}
+
+		var buf bytes.Buffer
+		err = tmpl.Execute(&buf, data)
+		if err != nil {
+			panic(err)
+		}
+		caseStatusMsg = fmt.Sprintf("%s %s", buf.String(), testCase.Case)
+	} else {
+		caseStatusMsg = fmt.Sprintf("%2d/%d  %s", i, c.getScenarioCount(), testCase.Case)
+	}
+
+	if testCase.Skip {
+		caseStatusMsg = fmt.Sprintf("%s%s %s, skipping reason: %s \033[0m", color, status, caseStatusMsg, testCase.skipReason)
+	} else {
+		caseStatusMsg = fmt.Sprintf("%s%s %s, %s\033[0m", color, status, caseStatusMsg, testCase.durationString)
+	}
+
 	for _, j := range c.getScenarioIds() {
 		if j == id {
 			if testCase.CanShow() {
-				if testCase.IsSuccessful() {
-					print(fmt.Sprintf("\033[32m✓ %2d/%d  %s, %s\033[0m", i, c.getScenarioCount(), testCase.Case, testCase.Duration))
-				} else {
-					print(fmt.Sprintf("\033[31m✗ %2d/%d  %s, %s\033[0m", i, c.getScenarioCount(), testCase.Case, testCase.Duration))
+				log.Print(caseStatusMsg)
+
+				if testCase.Skip {
+					return
 				}
 
-				if (verbosity > 1 && testCase.IsFailed()) || (verbosity > 2) {
-					if len(testCase.Before) > 0 {
-						printOutTaskResultDetails(3, "pre-tasks:")
+				if len(testCase.Before) > 0 && (verbosity == 3 || verbosity == 4) {
+					beforeScripts := []taskScriptDetails{}
+					l := len(testCase.Before)
+					for i, name := range testCase.Before {
+						beforeScripts = append(beforeScripts, taskScriptDetails{
+							Name:    fmt.Sprintf("%d/%d: %s", i+1, l, strings.TrimSpace(c.Cases[c.getIdByName(name)].Name)),
+							Script:  strings.TrimSpace(c.Cases[c.getIdByName(name)].Script),
+							Stdout:  strings.TrimSpace(c.Cases[c.getIdByName(name)].stdout),
+							Result:  c.Cases[c.getIdByName(name)].result,
+							Timeout: c.Cases[c.getIdByName(name)].Timeout,
+						})
 					}
+					printOut(fmt.Sprintf("pre-tasks (%d):", l), beforeScripts, 2)
+				}
 
-					for _, name := range testCase.Before {
-						printOutTaskResultDetails(5, "- name: "+name)
-						printOutTaskResultDetails(7, "script", c.Cases[c.getIdByName(name)].Script)
-						printOutTaskResultDetails(7, "stdout", c.Cases[c.getIdByName(name)].Stdout)
+				if (verbosity == 1 && testCase.IsFailed()) ||
+					(verbosity == 2) ||
+					(verbosity == 3) ||
+					(verbosity == 4) {
 
-						if c.Cases[c.getIdByName(name)].Result == nil {
-							printOutTaskResultDetails(7, "- exit status: 0 (\033[32msuccess\033[0m)")
-						} else {
-							printOutTaskResultDetails(7, strings.Replace(fmt.Sprintf("- %s (\033[31mfail\033[0m)", c.Cases[c.getIdByName(name)].Result), "exit status", "exit status:", 1))
-						}
-					}
-					if len(testCase.Before) > 0 {
-						printOutTaskResultDetails(5, "")
-					}
-
-					printOutTaskResultDetails(3, "main task:")
-					printOutTaskResultDetails(5, "script", testCase.Script)
-					printOutTaskResultDetails(5, "stdout", testCase.Stdout)
-
-					if testCase.Result == nil {
-						printOutTaskResultDetails(5, "- exit status: 0 (\033[32msuccess\033[0m)")
+					if (verbosity == 4) && testCase.IsFailed() {
+						printOut("main script:", []taskScriptDetails{
+							{
+								Script:  strings.TrimSpace(testCase.Script),
+								Stdout:  strings.TrimSpace(testCase.stdout),
+								Result:  testCase.result,
+								Timeout: testCase.Timeout,
+								Env:     testCase.env,
+							},
+						})
 					} else {
-						printOutTaskResultDetails(5, strings.Replace(fmt.Sprintf("- %s (\033[31mfail\033[0m)", testCase.Result), "exit status ", "exit status: ", 1))
-
-						if verbosity >= 3 {
-							printOutTaskResultDetails(4, "")
-							if testCase.DebugScript != "" {
-								printOutTaskResultDetails(3, "debug_script:")
-								printOutTaskResultDetails(5, "script", testCase.DebugScript)
-								printOutTaskResultDetails(5, "stdout", testCase.DebugStdout)
-
-								if testCase.DebugResult == nil {
-									printOutTaskResultDetails(5, "- exit status: 0")
-								} else {
-									printOutTaskResultDetails(5, strings.Replace(fmt.Sprintf("- %s", testCase.DebugResult), "exit status ", "exit status: ", 1))
-								}
-							} else {
-								printOutTaskResultDetails(3, "debug_script: \"\" (null)")
-							}
-						}
+						printOut("main script:", []taskScriptDetails{
+							{
+								Script:  strings.TrimSpace(testCase.Script),
+								Stdout:  strings.TrimSpace(testCase.stdout),
+								Result:  testCase.result,
+								Timeout: testCase.Timeout,
+							},
+						})
 					}
 
-					if len(testCase.After) > 0 {
-						printOutTaskResultDetails(4, "")
-						printOutTaskResultDetails(3, "post-tasks:")
-					}
-
-					for _, name := range testCase.After {
-						printOutTaskResultDetails(5, "- name: "+name)
-						printOutTaskResultDetails(7, "script", c.Cases[c.getIdByName(name)].Script)
-						printOutTaskResultDetails(7, "stdout", c.Cases[c.getIdByName(name)].Stdout)
-
-						if c.Cases[c.getIdByName(name)].Result == nil {
-							printOutTaskResultDetails(7, "- exit status: 0 (\033[32msuccess\033[0m)")
+					if verbosity == 3 || (verbosity == 4) {
+						if len(strings.TrimSpace(testCase.Debug.Script)) > 0 {
+							printOut("debug script:", []taskScriptDetails{
+								{
+									Script:  strings.TrimSpace(testCase.Debug.Script),
+									Stdout:  strings.TrimSpace(testCase.Debug.stdout),
+									Result:  testCase.Debug.result,
+									Timeout: testCase.Debug.Timeout,
+								},
+							})
 						} else {
-							printOutTaskResultDetails(7, strings.Replace(fmt.Sprintf("- %s (\033[31mfail\033[0m)", c.Cases[c.getIdByName(name)].Result), "exit status ", "exit status: ", 1))
+							printOut("debug script: undefined", []taskScriptDetails{})
 						}
 					}
 
-					log.Println()
+					if len(testCase.After) > 0 && (verbosity == 3 || verbosity == 4) {
+						afterScript := []taskScriptDetails{}
+						l := len(testCase.After)
+						for i, name := range testCase.After {
+							afterScript = append(afterScript, taskScriptDetails{
+								Name:    fmt.Sprintf("%d/%d: %s", i+1, l, strings.TrimSpace(c.Cases[c.getIdByName(name)].Name)),
+								Script:  strings.TrimSpace(c.Cases[c.getIdByName(name)].Script),
+								Stdout:  strings.TrimSpace(c.Cases[c.getIdByName(name)].stdout),
+								Result:  c.Cases[c.getIdByName(name)].result,
+								Timeout: c.Cases[c.getIdByName(name)].Timeout,
+							})
+						}
+						printOut(fmt.Sprintf("post-tasks (%d):", l), afterScript, 2)
+					}
 				}
 			}
 			return
@@ -335,21 +458,31 @@ func (c *suitConfig) printTestStatus(id int, asId ...int) {
 
 func (c *suitConfig) execTask(item int) {
 	testCase := &c.Cases[item]
-	if testCase.Script != "" {
-		taskStartTime := time.Now()
 
-		for _, name := range testCase.Before {
-			c.Cases[c.getIdByName(name)].RunBash()
-		}
-
-		testCase.RunBash()
-
-		for _, name := range testCase.After {
-			c.Cases[c.getIdByName(name)].RunBash()
-		}
-
-		testCase.Duration = duration(taskStartTime, time.Now())
+	if testCase.Skip {
+		testCase.skipReason = "'skip=true' setting"
+		return
 	}
+
+	if testCase.Script == "" {
+		testCase.skipReason = "empty 'script' setting"
+		testCase.Skip = true
+		return
+	}
+
+	taskStartTime := time.Now()
+
+	for _, name := range testCase.Before {
+		c.Cases[c.getIdByName(name)].RunBash()
+	}
+
+	testCase.RunBash()
+
+	for _, name := range testCase.After {
+		c.Cases[c.getIdByName(name)].RunBash()
+	}
+
+	testCase.durationString, testCase.durationMilliSeconds = duration(taskStartTime, time.Now())
 }
 
 func (t *suitConfig) getConf(config string, taskFilter ...string) *suitConfig {
@@ -371,8 +504,9 @@ func (t *suitConfig) getConf(config string, taskFilter ...string) *suitConfig {
 	}
 
 	a := &suitConfig{
-		Name:  (*t).Name,
-		Cases: []ScenarioItem{},
+		Name:        (*t).Name,
+		CustomIndex: (*t).CustomIndex,
+		Cases:       []ScenarioItem{},
 	}
 
 	for i := 0; i < len((*t).Cases); i++ {
@@ -413,6 +547,11 @@ func (t *suitConfig) getConf(config string, taskFilter ...string) *suitConfig {
 			}
 		}
 
+		if *timeout > 0 {
+			(*t).Cases[i].Timeout = *timeout
+			(*t).Cases[i].Debug.Timeout = *timeout
+		}
+
 		if len((*t).Cases[i].Loop.Items) > 0 || len((*t).Cases[i].Loop.Command) > 0 {
 			Items := []string{}
 
@@ -435,7 +574,15 @@ func (t *suitConfig) getConf(config string, taskFilter ...string) *suitConfig {
 			for _, item := range Items {
 				last := len(a.Cases)
 				(*a).Cases = append(a.Cases, (*t).Cases[i])
-				(*a).Cases[last].Case = fmt.Sprintf("%s, item => \"%s\"", (*t).Cases[i].Case, item)
+
+				nameHasItemVar := regexp.MustCompile(`\$item`)
+
+				if len(nameHasItemVar.FindStringSubmatch((*t).Cases[i].Case)) > 0 {
+					(*a).Cases[last].Case = nameHasItemVar.ReplaceAllString((*t).Cases[i].Case, item)
+				} else {
+					(*a).Cases[last].Case = fmt.Sprintf("%s, item => \"%s\"", (*t).Cases[i].Case, item)
+				}
+
 				if (*a).Cases[last].GlobalEnv == nil {
 					(*a).Cases[last].GlobalEnv = make(map[string]string)
 				}
@@ -462,8 +609,10 @@ func load(tmpFile *os.File, URL string) error {
 	return err
 }
 
-func duration(start time.Time, finish time.Time) string {
-	return finish.Sub(start).Truncate(time.Millisecond).String()
+func duration(start time.Time, finish time.Time) (string, int) {
+	result := finish.Sub(start).Truncate(time.Millisecond)
+	resultInMilliSeconds := int(result.Milliseconds())
+	return result.String(), resultInMilliSeconds
 }
 
 type reportFile struct {
@@ -497,7 +646,7 @@ func jUnitReportSave(reportFile string, c suitConfig) {
 			TotalTests:  c.all,
 			FailedTests: c.failed,
 			Tests:       c.Cases,
-			TotalTime:   c.duration,
+			TotalTime:   c.durationString,
 			TimeStamp:   time.Now().Format("2006-01-02T15:04:05"),
 			Verbosity:   0,
 		}
@@ -551,11 +700,11 @@ func jsonReportSave(reportFile string, c suitConfig) {
 				t := TestData{
 					Name:     c.Cases[id].Case,
 					Status:   c.Cases[id].IsSuccessful(),
-					Duration: c.Cases[id].Duration,
+					Duration: c.Cases[id].durationString,
 				}
 
 				if (verbosity > 1 && c.Cases[id].IsFailed()) || (verbosity > 2) {
-					t.Stdout = c.Cases[id].Stdout
+					t.Stdout = c.Cases[id].stdout
 				}
 
 				jsonReportData.Tests = append(jsonReportData.Tests, t)
@@ -567,7 +716,7 @@ func jsonReportSave(reportFile string, c suitConfig) {
 		Success:  c.successfull,
 		Failed:   c.failed,
 		Rating:   c.score,
-		Duration: c.duration,
+		Duration: c.durationString,
 	}
 
 	reportJson, _ := json.MarshalIndent(jsonReportData, "", "  ")
@@ -575,78 +724,96 @@ func jsonReportSave(reportFile string, c suitConfig) {
 }
 
 var (
-	localConfig  = flag.String("c", "", "Local tests case file path (Required unless -C cpecified)")
-	remoteConfig = flag.String("C", "", "Remote tests case file url (Required unless -c specified)")
-	filter       = flag.String("f", "", "Run tests by name regexp match")
-	wdir         = flag.String("w", "", "Set working Dir")
-	reportFlag   = flag.String("o", "", "JSON or JUnit report file")
+	localConfig               = flag.String("c", "", "Local tests case file path (Required unless -C cpecified)")
+	remoteConfig              = flag.String("C", "", "Remote tests case file url (Required unless -c specified)")
+	filter                    = flag.String("f", "", "Run tests by name regexp match")
+	wdir                      = flag.String("w", "", "Set working Dir")
+	reportFlag                = flag.String("o", "", "JSON or JUnit report file")
+	timeout                   = flag.Int("t", 0, "Timeout of the task execution")
+	generateSampleTesCaseFile = flag.Bool("g", false, "")
 )
 
 var verbosity int = 0
 
-func customUsage() {
-	fmt.Fprintf(flag.CommandLine.Output(), "Usage of ./%s:\n", filepath.Base(os.Args[0]))
-	flag.PrintDefaults()
-	fmt.Println("  -vX")
-	fmt.Println("        Verbosity level. Can be:")
-	fmt.Println("          -v (-v1, --verbosity=1),")
-	fmt.Println("          -vv (-v2, --verbosity=2),")
-	fmt.Println("          -vvv (-v3, --verbosity=3)")
-	fmt.Println("\nMore details: https://github.com/sbeliakou/check-up/")
-}
-
 func listFiles(path string) []string {
-	f, _ := os.Stat(path)
-	if f.IsDir() {
-		path = fmt.Sprintf("%s/*.yml", path)
-	}
+	var result []string
 
-	files, _ := filepath.Glob(path)
-	result := []string{""}
+	var walkDir func(dirPath string)
+	walkDir = func(dirPath string) {
+		entries, err := os.ReadDir(dirPath)
+		if err != nil {
+			log.Fatal(err)
+		}
 
-	for _, file := range files {
-		f, _ := os.Stat(file)
-		if !f.IsDir() {
-			if len(file) > 0 {
-				result = append(result, file)
+		for _, entry := range entries {
+			fullPath := filepath.Join(dirPath, entry.Name())
+			if entry.IsDir() {
+				walkDir(fullPath)
+			} else if filepath.Ext(fullPath) == ".yaml" || filepath.Ext(fullPath) == ".yml" {
+				result = append(result, fullPath)
 			}
-		} else {
-			result = append(result, listFiles(file)...)
 		}
 	}
+
+	f, err := os.Stat(path)
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	if f.IsDir() {
+		walkDir(path)
+	} else {
+		result = append(result, path)
+	}
+
+	if len(result) == 0 {
+		log.Fatalf("There are no yaml or yml files found in the path: %s", path)
+	}
+
 	return result
 }
 
 func main() {
+	log.SetFlags(0)
+
 	// Modified Args slice
 	args := os.Args[:1] // keep the program name
 	verbosity = 0
-	verbosityRegexp := regexp.MustCompile(`^-v(v+)?=?(\d+)?$|^--verbosity=(\d+)$`)
 	for _, arg := range os.Args[1:] {
-		matches := verbosityRegexp.FindStringSubmatch(arg)
-		if len(matches) > 0 {
-			if matches[1] != "" { // Handle -vv, -vvv (matches multiple 'v' after the first)
-				verbosity = len(matches[1]) + 1 // +1 because the first 'v' wasn't counted in matches[1]
-			} else if matches[2] != "" { // Handle -v=2, -v=3, etc.
-				verbosity, _ = strconv.Atoi(matches[2])
-			} else if matches[3] != "" { // Handle --verbosity=2, --verbosity=3, etc.
-				verbosity, _ = strconv.Atoi(matches[3])
+		if arg != "--version" {
+			matches := regexp.MustCompile(`^-v(v+)?=?(\d+)?$|^--verbosity=(\d+)$`).FindStringSubmatch(arg)
+			if len(matches) > 0 {
+				if matches[0] == "-v" && matches[1] == "" { // Handle -v, means the same as -v=1
+					verbosity = 1
+				} else if matches[1] != "" { // Handle -vv, -vvv (matches multiple 'v' after the first)
+					verbosity = len(matches[1]) + 1 // +1 because the first 'v' wasn't counted in matches[1]
+				} else if matches[2] != "" { // Handle -v=2, -v=3, etc.
+					verbosity, _ = strconv.Atoi(matches[2])
+				} else if matches[3] != "" { // Handle --verbosity=2, --verbosity=3, etc.
+					verbosity, _ = strconv.Atoi(matches[3])
+				}
+
+			} else {
+				args = append(args, arg) // include other args to be parsed by flag package
 			}
 		} else {
-			args = append(args, arg) // include other args to be parsed by flag package
+			log.Println(version)
+			os.Exit(0)
 		}
 	}
 
 	os.Args = args
 
-	flag.Usage = customUsage
+	flag.Usage = helper.CustomUsage
 	flag.Parse()
 
+	if *generateSampleTesCaseFile {
+		log.Println(helper.SampleTestFile)
+		os.Exit(0)
+	}
+
 	workdir = *wdir
-
 	report.parse(*reportFlag)
-
-	log.SetFlags(0)
 
 	d := []suitConfig{}
 	if *localConfig != "" {
@@ -688,7 +855,6 @@ func main() {
 		}
 	} else {
 		flag.Usage()
-		log.Fatal("Missing required flags: either -c or -C must be specified.")
 	}
 }
 
@@ -697,21 +863,23 @@ func handleScenarios(c *suitConfig) {
 	if c.getScenarioCount() > 0 {
 		max := 30
 		for i, id := range c.getScenarioIds() {
-			task_title := fmt.Sprintf("   %d/%d  %s", i, c.getScenarioCount(), c.Cases[id].Case)
-			if max < len(task_title) {
-				max = len(task_title)
+			taskTitle := fmt.Sprintf("   %d/%d  %s", i, c.getScenarioCount(), c.Cases[id].Case)
+			if max < len(taskTitle) {
+				max = len(taskTitle)
 			}
 		}
 
-		fmt.Println(strings.Repeat("-", max+7))
-		for i, id := range c.getScenarioIds() {
+		log.Println(strings.Repeat("-", max+7))
+		j := 0
+		for _, id := range c.getScenarioIds() {
 			c.execTask(id)
 			if c.Cases[id].CanShow() {
-				c.printTestStatus(id, i+1)
+				c.printTestStatus(id, j+1)
+				j++
 			}
 		}
 
-		fmt.Println(strings.Repeat("-", max+7))
+		log.Println(strings.Repeat("-", max+7))
 	}
 	c.signOff()
 	c.printSummary()
