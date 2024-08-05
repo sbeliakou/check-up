@@ -842,7 +842,6 @@ func main() {
 		if matched, _ := regexp.MatchString("^http(s)?://", *remoteConfig); matched {
 			load(tmpFile, *remoteConfig)
 			*localConfig = tmpFile.Name()
-			log.Println("Using temporary file for configuration:", tmpFile.Name())
 		}
 
 		d = append(d, *(&suitConfig{}).getConf(*localConfig, *filter))
