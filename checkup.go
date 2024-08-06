@@ -24,7 +24,7 @@ import (
 	"github.com/sbeliakou/check-up/modules/jUnit"
 )
 
-var version string = "v0.2.5"
+var version string = "v0.2.6"
 var workdir string = ""
 
 func print(msg string) {
