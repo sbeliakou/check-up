@@ -1,0 +1,10 @@
+name: "2. Services. Catalog: Time Synchronization"
+custom_index: "2.2.{{ .TaskId }}"
+cases:
+- case: Ensure time syncrhonization is in use
+  script: 
+
+- case: Ensure chrony is configured
+  script: |
+    [ $(grep -E "^(server|pool)" /etc/chrony.conf &> /dev/null; echo $?) -eq 0 ] &&
+    [ $(ps -ef | grep chronyd &> /dev/null; echo $?) -eq 0 ]

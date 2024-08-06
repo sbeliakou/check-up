@@ -1,0 +1,13 @@
+name: "1. Initial Setup. Catalog: Software Update"
+custom_index: "1.2.{{ .TaskId }}"
+cases:
+- case: Ensure GPG keys are configured
+  script: 
+
+- case: Ensure gpgcheck is globally activated
+  script: |
+    grep ^gpgcheck=1 /etc/yum.conf && 
+    [ $(grep ^gpgcheck=1 /etc/yum.repos.d/* | wc -l) -eq $(grep ^gpgcheck /etc/yum.repos.d/* | wc -l) ]
+
+- case: Ensure package manager repositories are configured
+  script:

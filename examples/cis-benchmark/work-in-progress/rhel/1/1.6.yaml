@@ -1,0 +1,14 @@
+name: "1. Initial Setup. Catalog: Additional Process Hardening"
+custom_index: "1.6.{{ .TaskId }}"
+cases:
+- case: Ensure core dumps are restricted
+  script: |
+    [ $(grep -E "^\s*\*\s+hard\s+core" /etc/security/limits.conf /etc/security/limits.d/* 2> /dev/null | wc -l) -ne 0 ] && 
+    [ $(sysctl fs.suid_dumpable | wc -l) -ne 0 ] && 
+    [ $(grep "fs\.suid_dumpable" /etc/sysctl.conf /etc/sysctl.d/* 2> /dev/null | wc -l) -ne 0 ] && 
+    [ $(systemctl is-enabled coredump.service 2> /dev/null | wc -l) -ne 0 ]
+
+- case: Ensure address space layout randomization is enabled
+  script: |
+    [ $(sysctl kernel.randomize_va_space | grep 2 | wc -l) -ne 0 ] && 
+    [ $(grep "kernel\.randomize_va_space" /etc/sysctl.conf /etc/sysctl.d/* 2> /dev/null | wc -l ) -ne 0 ]

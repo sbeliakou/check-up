@@ -1,0 +1,11 @@
+name: "2. Services. Catalog: Service Clients"
+custom_index: "2.4.{{ .TaskId }}"
+cases:
+- case: Ensure $item client is not installed
+  script: |
+    rpm -qa $item && exit 1 || exit 0 
+  loop:
+    items:
+      - ypbind
+      - telnet
+      - openldap-clients

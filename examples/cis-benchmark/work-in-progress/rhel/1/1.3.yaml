@@ -1,0 +1,17 @@
+name: "1. Initial Setup. Catalog: sudo"
+custom_index: "1.3.{{ .TaskId }}"
+cases:
+- case: Ensure $item is installed
+  script: |
+    rpm -qa $item
+  loop:
+    items:
+      - sudo
+
+- case: Ensure sudo commands use pty
+  script: |
+    grep -Ei '^\s*Defaults\s+(\[^#]+,\s*)?use_pty' /etc/sudoers /etc/sudoers.d/*
+
+- case: Ensure sudo log file exists
+  script: |
+    grep -Ei '^\s*Defaults\s+(\[^#]+,\s*)?use_pty' /etc/sudoers /etc/sudoers.d/*

@@ -1,0 +1,15 @@
+name: "1. Initial Setup. Catalog: Filesystem Integrity"
+custom_index: "1.4.{{ .TaskId }}"
+cases:
+- case: Ensure "aide" is installed 
+  script: |
+    rpm -qa $item
+  loop:
+    items:
+      - aide
+
+- case: Ensure filesystem integirty is regularly
+  script: |
+    [[ "$(systemctl is-enabled aidecheck.service 2> /dev/null)" =~ "enabled" ]] &&
+    [[ "$(systemctl status aidecheck.service 2> /dev/null)" =~ "active" ]]
+

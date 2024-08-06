@@ -1,0 +1,30 @@
+name: "1. Initial Setup. Catalog: motd"
+custom_index: "1.7.{{ .TaskId }}"
+cases:
+- case: Ensure message and permissions on $item are configured properly
+  script: |
+    [ $(cat "$item" | wc -l) -ne 0 ] &&
+    [[ $(grep -E -i "(\\\v|\\\r|\\\m|\\\s|$(grep '^ID=' /etc/os-release | cut -d= -f2 | sed -e 's/"//g'))" "$item" | wc -l) -eq 0 ]] &&
+    [ $(stat $item | grep 0644 | wc -l) -ne 0 ] &&
+    [ $(stat $item | egrep -o "0\/\s+root" | wc -l) -eq 2 ]
+  loop:
+    items:
+      - /etc/motd
+      - /etc/issue
+      - /etc/issue.net
+
+- case: Ensure GDM login banner is configured
+  script: | 
+    rpm -q gdm && test -f $gdm_file &&
+    egrep "^banner-message-enable=true" $banner_file | wc -l | grep -q '^1$' &&
+    egrep "banner-message-text=.*" $banner_file | wc -l | grep -q '^1$'
+  env:
+    gdm_file: /etc/dconf/profile/gdm
+    banner_file: /etc/dconf/db/gdm.d/01-banner-message
+
+- case: Ensure updates, patches and additional security software
+  script:
+
+- case: Ensure system-wide crypto policy is not legacy
+  script: |
+    grep -E -i '^\s*LEGACY\s*(\s+#.*)?$' /etc/crypto-policies/config | wc -l | grep -q '^0$'

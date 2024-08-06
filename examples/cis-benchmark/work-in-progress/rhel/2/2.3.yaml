@@ -1,0 +1,34 @@
+name: "2. Services. Catalog: Special Purpose Services"
+custom_index: "2.3.{{ .TaskId }}"
+cases:
+- case: Ensure X Window System is not installed
+  script: |
+    rpm -qa $item && exit 1 || exit 0 
+  loop:
+    items:
+      - xorg-x11*
+
+- case: Ensure '$item' service is not enabled 
+  script: |
+    systemctl is-enabled $item | grep disabled
+  loop:
+    items:
+      - rsyncd
+      - avahi-daemon
+      - snmpd
+      - squid
+      - smb
+      - dovecot
+      - httpd
+      - vsftpd
+      - named
+      - nfs
+      - rpcbind
+      - slapd
+      - dhcpd
+      - cups
+      - ypserv
+
+- case: Ensure mail transfer agent is configured for local-only mode
+  script: |
+    ss -lntu | grep -E ':25\s' | grep -E -v '\s(127.0.0.1|::1):25\s'

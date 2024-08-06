@@ -1,0 +1,13 @@
+name: "3. Network Configuration. Catalog: Network Parameter (host only)"
+custom_index: "3.1.{{ .TaskId }}"
+cases:
+- case: Ensure $item is disabled
+  script: |
+    [ $(sysctl net.ipv4.$query | grep 0 | wc -l) -ne 0 ] &&
+    [ $(grep -E -s "^\s*net\.ipv4\.$query\s*=\s*1" /etc/sysctl.conf /etc/sysctl.d/*.conf /usr/lib/sysctl.d/*.conf /run/sysctl.d/*.conf | wc -l) -eq 0 ] &&
+    [ $(sysctl net.ipv6.conf.all.$query6 | grep 0 | wc -l) -ne 0 ] && 
+    [ $(grep -E -s "^\s*net\.ipv6\.conf\.all\.$query6\s*=\s*1" /etc/sysctl.conf /etc/sysctl.d/*.conf /usr/lib/sysctl.d/*.conf /run/sysctl.d/*.conf | wc -l) -eq 0 ]
+  loop:
+    items: 
+      - ip_forward
+      - send_directs

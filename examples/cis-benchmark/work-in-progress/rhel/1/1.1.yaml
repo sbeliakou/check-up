@@ -1,0 +1,47 @@
+name: "1. Initial Setup. Catalog: Filesystem"
+custom_index: "1.1.{{ .TaskId }}"
+cases:
+- case: Ensure mounting of "$item" is disabled
+  script: |
+    [[ "$(modprobe -n -v $item 2> /dev/null | tail -1)" =~ "install /bin/true" ]] &&
+    lsmod | grep $item | wc -l | grep -q '^0$'
+  loop:
+    items:
+      - cramfs
+      - squashfs
+      - udf
+
+- case: Ensure /tmp is configured
+  script: |
+    [[ "$(mount | grep -E '\s/tmp\s')" =~ ".*tmpfs\s\(rw.*nosuid.*nodev.*noexec.*relatime\)" ]] && 
+    systemctl is-enabled tmp.mount | grep -E 'disabled'
+
+- case: Ensure nodev, nosuid, noexec option set on "$item" partition
+  script: |
+    mount | grep -E "\s$item\s" | grep -v -e nodev -e nosuid -e noexec | wc -l | grep -q '^0$'
+  loop:
+    items:
+      - /tmp
+      - /var/tmp
+
+- case: Ensure nodev, nosuid, noexec option set on removable media partition
+  script:
+
+- case: Ensure sticky bit is set on all world-writable directories
+  script: >
+    df --local -P | 
+    awk '{if (NR!=1) print$6}' | 
+    xargs -l '{}' find '{}' -xdev -type d \( -perm -002 -a ! -perm -1000 \) 2> /dev/null | 
+    wc -l | grep -q '^0$'
+
+- case: Disable Automounting
+  script: |
+    systemctl is-enabled autofs | grep -E 'disabled'
+
+- case: Ensure mounting of $item is disabled
+  script: |
+    [[ "$(modprobe -n -v $item 2> /dev/null | tail -1)" =~ "install /bin/true" ]] &&
+    lsmod | grep $item
+  loop:
+    items:
+      - usb-storage

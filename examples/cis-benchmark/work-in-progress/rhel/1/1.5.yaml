@@ -1,0 +1,15 @@
+name: "1. Initial Setup. Catalog: Secure Boot Settings"
+custom_index: "1.5.{{ .TaskId }}"
+cases:
+- case: Ensure permissions on bootloader config are configured
+  script: |
+    [ $(stat /boot/grub2/grub.cfg /boot/grub2/grubenv | grep 0600 | wc -l) -eq 2 ] && 
+    [ $(stat /boot/grub2/grub.cfg /boot/grub2/grubenv | egrep -o "0\/\s+root" | wc -l) -eq 4 ]
+
+- case: Ensure bootloader password is set
+  script: |
+    [ $(grep "^\s*GRUB2_PASSWORD" /boot/grub2/user.cfg 2> /dev/null | wc -l) -ne 0 ]
+
+- case: Ensure authentication required for single user mode
+  script: |
+    [ $(grep /systemd-sulogin-shell /usr/lib/systemd/system/rescue.service /usr/lib/systemd/system/emergency.service 2> /dev/null | wc -l) -eq 2 ]
