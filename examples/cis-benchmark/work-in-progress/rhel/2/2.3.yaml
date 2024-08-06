@@ -10,7 +10,8 @@ cases:
 
 - case: Ensure '$item' service is not enabled 
   script: |
-    systemctl is-enabled $item | grep disabled
+    systemctl is-enabled $item | grep "$item.service: No such file or directory" ||
+    systemctl is-enabled $item | grep disabled    
   loop:
     items:
       - rsyncd

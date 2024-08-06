@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bufio"
 	"bytes"
 	"encoding/json"
 	"flag"
@@ -43,11 +44,32 @@ type LoopConfig struct {
 	Command string   `yaml:"command"`
 }
 
+type suitConfig struct {
+	Name        string            `yaml:"name"`
+	FileName    string            `yaml:"filename"`
+	Cases       []ScenarioItem    `yaml:"cases"`
+	CustomIndex string            `yaml:"custom_index"`
+	Env         map[string]string `yaml:"env"`
+	EnvFiles    []string          `yaml:"envFiles"`
+
+	startTime time.Time
+	endTime   time.Time
+
+	all                  int
+	successfull          int
+	skipped              int
+	failed               int
+	score                float64
+	durationString       string
+	durationMilliSeconds int
+}
+
 type ScenarioItem struct {
 	// YAML-Defined data
 	Name        string            `yaml:"name"`
 	Case        string            `yaml:"case"`
 	Env         map[string]string `yaml:"env"`
+	EnvFiles    []string          `yaml:"envFiles"`
 	Workdir     string            `yaml:"workdir"`
 	Description string            `yaml:"description"`
 	Script      string            `yaml:"script"`
@@ -81,6 +103,8 @@ type ScenarioItem struct {
 	env []string
 
 	skipReason string
+
+	errors []error
 }
 
 func (s *ScenarioItem) IsSuccessful() bool {
@@ -109,6 +133,7 @@ func (s *ScenarioItem) RunBash(GlobalEnv map[string]string) ([]byte, error) {
 						return fmt.Sprintf("%s=%s", envItemName, value)
 					}
 				}
+				s.errors = append(s.errors, fmt.Errorf("there's no such variable %s", matches[1]))
 				return fmt.Sprintf("%s=", envItemName)
 			}
 		}
@@ -120,6 +145,40 @@ func (s *ScenarioItem) RunBash(GlobalEnv map[string]string) ([]byte, error) {
 		env = append(env,
 			getIfItsGlobalEnvVar(key, value),
 		)
+	}
+
+	if len(s.EnvFiles) > 0 {
+		for _, sourceFile := range s.EnvFiles {
+			file, err := os.Open(sourceFile)
+			if err != nil {
+				s.errors = append(s.errors, err)
+				continue
+			}
+
+			// Use bufio.Scanner to read the file line by line
+			scanner := bufio.NewScanner(file)
+			for scanner.Scan() {
+				line := scanner.Text()
+				key := strings.Split(line, "=")[0]
+				value := strings.Split(line, "=")[1]
+
+				if s.Env == nil {
+					s.Env = make(map[string]string)
+				}
+				s.Env[key] = value
+			}
+
+			// Close the file after reading
+			if err := file.Close(); err != nil {
+				fmt.Println("Error closing file:", err)
+				continue
+			}
+
+			// Check for errors during line scanning
+			if err := scanner.Err(); err != nil {
+				fmt.Println("Error reading file:", err)
+			}
+		}
 	}
 
 	for key, value := range s.Env {
@@ -147,25 +206,6 @@ func (s *ScenarioItem) RunBash(GlobalEnv map[string]string) ([]byte, error) {
 	}
 
 	return stdout, err
-}
-
-type suitConfig struct {
-	Name        string            `yaml:"name"`
-	FileName    string            `yaml:"filename"`
-	Cases       []ScenarioItem    `yaml:"cases"`
-	CustomIndex string            `yaml:"custom_index"`
-	Env         map[string]string `yaml:"env"`
-
-	startTime time.Time
-	endTime   time.Time
-
-	all                  int
-	successfull          int
-	skipped              int
-	failed               int
-	score                float64
-	durationString       string
-	durationMilliSeconds int
 }
 
 func (c *suitConfig) getScenarioIds() []int {
@@ -286,6 +326,7 @@ type taskScriptDetails struct {
 	Result  error
 	Timeout int
 	Env     []string
+	Errors  []error
 }
 
 func printOut(b string, t []taskScriptDetails, indent ...int) {
@@ -328,6 +369,13 @@ func printOut(b string, t []taskScriptDetails, indent ...int) {
 			log.Println(indentStr + "environment:")
 			for _, v := range item.Env {
 				log.Println(indentStr + "  " + v)
+			}
+		}
+
+		if len(item.Errors) > 0 {
+			log.Println(indentStr + "warnings:")
+			for _, v := range item.Errors {
+				log.Println(indentStr + "  " + v.Error())
 			}
 		}
 
@@ -412,6 +460,7 @@ func (c *suitConfig) printTestStatus(id int, asId ...int) {
 							Stdout:  strings.TrimSpace(c.Cases[c.getIdByName(name)].stdout),
 							Result:  c.Cases[c.getIdByName(name)].result,
 							Timeout: c.Cases[c.getIdByName(name)].Timeout,
+							Errors:  c.Cases[c.getIdByName(name)].errors,
 						})
 					}
 					printOut(fmt.Sprintf("pre-tasks (%d):", l), beforeScripts, 2)
@@ -430,6 +479,7 @@ func (c *suitConfig) printTestStatus(id int, asId ...int) {
 								Result:  testCase.result,
 								Timeout: testCase.Timeout,
 								Env:     testCase.env,
+								Errors:  testCase.errors,
 							},
 						})
 					} else {
@@ -439,6 +489,7 @@ func (c *suitConfig) printTestStatus(id int, asId ...int) {
 								Stdout:  strings.TrimSpace(testCase.stdout),
 								Result:  testCase.result,
 								Timeout: testCase.Timeout,
+								Errors:  testCase.errors,
 							},
 						})
 					}
@@ -451,6 +502,7 @@ func (c *suitConfig) printTestStatus(id int, asId ...int) {
 									Stdout:  strings.TrimSpace(testCase.Debug.stdout),
 									Result:  testCase.Debug.result,
 									Timeout: testCase.Debug.Timeout,
+									Errors:  testCase.errors,
 								},
 							})
 						} else {
@@ -468,6 +520,7 @@ func (c *suitConfig) printTestStatus(id int, asId ...int) {
 								Stdout:  strings.TrimSpace(c.Cases[c.getIdByName(name)].stdout),
 								Result:  c.Cases[c.getIdByName(name)].result,
 								Timeout: c.Cases[c.getIdByName(name)].Timeout,
+								Errors:  c.Cases[c.getIdByName(name)].errors,
 							})
 						}
 						printOut(fmt.Sprintf("post-tasks (%d):", l), afterScript, 2)
@@ -526,15 +579,44 @@ func (t *suitConfig) getConf(config string, taskFilter ...string) *suitConfig {
 		wdir = workdir
 	}
 
-	// if (*t).Env == nil {
-	// 	(*t).Env = make(map[string]string)
-	// }
+	if len(t.EnvFiles) > 0 {
+		for _, sourceFile := range t.EnvFiles {
+			file, err := os.Open(sourceFile)
+			if err != nil {
+				// t.errors = append(t.errors, err)
+				continue
+			}
+
+			// Use bufio.Scanner to read the file line by line
+			scanner := bufio.NewScanner(file)
+			for scanner.Scan() {
+				line := scanner.Text()
+				key := strings.Split(line, "=")[0]
+				value := strings.Split(line, "=")[1]
+
+				if t.Env == nil {
+					t.Env = make(map[string]string)
+				}
+				t.Env[key] = value
+			}
+
+			// Close the file after reading
+			if err := file.Close(); err != nil {
+				// fmt.Println("Error closing file:", err)
+				continue
+			}
+
+			// Check for errors during line scanning
+			// if err := scanner.Err(); err != nil {
+			// 	fmt.Println("Error reading file:", err)
+			// }
+		}
+	}
 
 	a := &suitConfig{
 		Name:        (*t).Name,
 		CustomIndex: (*t).CustomIndex,
 		Cases:       []ScenarioItem{},
-		// Env:         t.Env,
 	}
 
 	for i := 0; i < len((*t).Cases); i++ {

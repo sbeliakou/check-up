@@ -210,7 +210,7 @@ Example - A few tasks:
 ### 5. Setting custom Environment variables for specific tasks or globally for the tasks suit
 Sometimes it's essential to run tasks with some additional Environmental variables
 
-Example - Setting Enviroment Variables:
+Example - Setting Environment Variables:
 ```yaml
 - case: check something using custom env variables
   script: |

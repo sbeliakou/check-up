@@ -8,6 +8,10 @@ env:
   ZONE4: eu-central1-d
   ZONE5: eu-central1-e
 
+# Expecting these files exist and have data in format key=value
+envFiles:
+  - /etc/environment
+
 cases:
 - case: Demo using Environment variables
   script: |
@@ -27,6 +31,20 @@ cases:
 
   # Variables which will be added to the task execution
   # In this example, REGION will be set to the value of
-  # AWS_REGION taken from checkup eexecution shell environment
+  # AWS_REGION taken from checkup execution shell environment
   env:
     REGION: "{GLOBAL:AWS_REGION}"
+
+- case: Loading Env Variables from local file (specified globally)
+  script: |
+    printenv CLUSTER_NAME
+  debug:
+    script: env
+
+- case: Loading Env Variables from local file (specified for the current task)
+  script: |
+    printenv REGION
+  debug:
+    script: env
+  envFiles:
+    - /opt/environment
