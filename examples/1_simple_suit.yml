@@ -1,12 +1,12 @@
 name: Simple Test
 cases:
-- case: "Check if '/tmp/dir1' created"
+- case: Verify existence of '/tmp/dir1'
   script: |
-    [ -d /tmp/dir1 ]
+    test -d /tmp/dir1
 
-- case: "Check if '/opt' created"
+- case: Validate presence of '/opt/app'
   script: |
-    [ -d /opt ]
+    test -d /opt/app
 
-- case: "Check if 'user1' exists"
+- case: Validate presence of user 'user1'
   script: id user1

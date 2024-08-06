@@ -47,7 +47,6 @@ type ScenarioItem struct {
 	// YAML-Defined data
 	Name        string            `yaml:"name"`
 	Case        string            `yaml:"case"`
-	GlobalEnv   map[string]string `yaml:"global_env"`
 	Env         map[string]string `yaml:"env"`
 	Workdir     string            `yaml:"workdir"`
 	Description string            `yaml:"description"`
@@ -63,7 +62,7 @@ type ScenarioItem struct {
 	Timeout     int               `yaml:"timeout"`
 
 	Debug struct {
-		Script  string `yaml:"debug_script"`
+		Script  string `yaml:"script"`
 		Timeout int    `yaml:"timeout"`
 		stdout  string
 		result  error
@@ -97,23 +96,41 @@ func (s *ScenarioItem) CanShow() bool {
 	return s.canShow
 }
 
-func (s *ScenarioItem) RunBash() ([]byte, error) {
-	var env []string = os.Environ()
-	for key, value := range s.GlobalEnv {
+func (s *ScenarioItem) RunBash(GlobalEnv map[string]string) ([]byte, error) {
+	getIfItsGlobalEnvVar := func(envItemName string, envItemValue string) string {
+		re, _ := regexp.Compile(`^\{GLOBAL:(.*)\}$`)
+		if re.MatchString(envItemValue) {
+			matches := re.FindStringSubmatch(envItemValue)
+			if len(matches) > 1 {
+				for _, v := range os.Environ() {
+					key := strings.Split(v, "=")[0]
+					value := strings.Split(v, "=")[1]
+					if key == matches[1] {
+						return fmt.Sprintf("%s=%s", envItemName, value)
+					}
+				}
+				return fmt.Sprintf("%s=", envItemName)
+			}
+		}
+		return fmt.Sprintf("%s=%s", envItemName, envItemValue)
+	}
+
+	var env []string
+	for key, value := range GlobalEnv {
 		env = append(env,
-			fmt.Sprintf("%s=%s", key, value),
+			getIfItsGlobalEnvVar(key, value),
 		)
 	}
 
 	for key, value := range s.Env {
 		env = append(env,
-			fmt.Sprintf("%s=%s", key, value),
+			getIfItsGlobalEnvVar(key, value),
 		)
 	}
 
 	s.env = env
 
-	stdout, err := bash.RunBashScript(s.Script, workdir, s.Timeout, env)
+	stdout, err := bash.RunBashScript(s.Script, workdir, s.Timeout, s.env)
 	s.stdout = strings.TrimSpace(string(stdout))
 	s.result = err
 
@@ -123,7 +140,7 @@ func (s *ScenarioItem) RunBash() ([]byte, error) {
 		s.status = "failed"
 
 		if s.Debug.Script != "" {
-			debugStdout, debugErr := bash.RunBashScript(s.Debug.Script, workdir, s.Debug.Timeout, env)
+			debugStdout, debugErr := bash.RunBashScript(s.Debug.Script, workdir, s.Debug.Timeout, s.env)
 			s.Debug.stdout = strings.TrimSpace(string(debugStdout))
 			s.Debug.result = debugErr
 		}
@@ -133,10 +150,11 @@ func (s *ScenarioItem) RunBash() ([]byte, error) {
 }
 
 type suitConfig struct {
-	Name        string         `yaml:"name"`
-	FileName    string         `yaml:"filename"`
-	Cases       []ScenarioItem `yaml:"cases"`
-	CustomIndex string         `yaml:"custom_index"`
+	Name        string            `yaml:"name"`
+	FileName    string            `yaml:"filename"`
+	Cases       []ScenarioItem    `yaml:"cases"`
+	CustomIndex string            `yaml:"custom_index"`
+	Env         map[string]string `yaml:"env"`
 
 	startTime time.Time
 	endTime   time.Time
@@ -323,6 +341,7 @@ func printOut(b string, t []taskScriptDetails, indent ...int) {
 
 func (c *suitConfig) printTestStatus(id int, asId ...int) {
 	testCase := c.Cases[id]
+
 	status, color := "✗", "\033[31m" // Assume failure
 
 	if testCase.IsSuccessful() {
@@ -361,7 +380,11 @@ func (c *suitConfig) printTestStatus(id int, asId ...int) {
 		}
 		caseStatusMsg = fmt.Sprintf("%s %s", buf.String(), testCase.Case)
 	} else {
-		caseStatusMsg = fmt.Sprintf("%2d/%d  %s", i, c.getScenarioCount(), testCase.Case)
+		if testCase.Case != "" {
+			caseStatusMsg = fmt.Sprintf("%2d/%d  %s", i, c.getScenarioCount(), testCase.Case)
+		} else {
+			caseStatusMsg = fmt.Sprintf("%2s/%s  %s", "-", "-", "Silent task, not scored")
+		}
 	}
 
 	if testCase.Skip {
@@ -372,7 +395,7 @@ func (c *suitConfig) printTestStatus(id int, asId ...int) {
 
 	for _, j := range c.getScenarioIds() {
 		if j == id {
-			if testCase.CanShow() {
+			if testCase.CanShow() || (verbosity >= 3) {
 				log.Print(caseStatusMsg)
 
 				if testCase.Skip {
@@ -420,9 +443,9 @@ func (c *suitConfig) printTestStatus(id int, asId ...int) {
 						})
 					}
 
-					if verbosity == 3 || (verbosity == 4) {
+					if testCase.IsFailed() && (verbosity == 3 || verbosity == 4) {
 						if len(strings.TrimSpace(testCase.Debug.Script)) > 0 {
-							printOut("debug script:", []taskScriptDetails{
+							printOut("debug:", []taskScriptDetails{
 								{
 									Script:  strings.TrimSpace(testCase.Debug.Script),
 									Stdout:  strings.TrimSpace(testCase.Debug.stdout),
@@ -431,7 +454,7 @@ func (c *suitConfig) printTestStatus(id int, asId ...int) {
 								},
 							})
 						} else {
-							printOut("debug script: undefined", []taskScriptDetails{})
+							printOut("debug: script undefined", []taskScriptDetails{})
 						}
 					}
 
@@ -473,13 +496,13 @@ func (c *suitConfig) execTask(item int) {
 	taskStartTime := time.Now()
 
 	for _, name := range testCase.Before {
-		c.Cases[c.getIdByName(name)].RunBash()
+		c.Cases[c.getIdByName(name)].RunBash(c.Env)
 	}
 
-	testCase.RunBash()
+	testCase.RunBash(c.Env)
 
 	for _, name := range testCase.After {
-		c.Cases[c.getIdByName(name)].RunBash()
+		c.Cases[c.getIdByName(name)].RunBash(c.Env)
 	}
 
 	testCase.durationString, testCase.durationMilliSeconds = duration(taskStartTime, time.Now())
@@ -494,26 +517,36 @@ func (t *suitConfig) getConf(config string, taskFilter ...string) *suitConfig {
 
 	err = yaml.Unmarshal(yamlFile, t)
 	if err != nil {
-		log.Fatalf(fmt.Sprintf("Cannot recognize configuration structure in %s file: ", config))
+		log.Fatalf("Cannot recognize configuration structure in file: %s", config)
 	}
 
-	var envs map[string]string
+	// var envs map[string]string
 	wdir, _ := os.Getwd()
 	if workdir != "" {
 		wdir = workdir
 	}
 
+	// if (*t).Env == nil {
+	// 	(*t).Env = make(map[string]string)
+	// }
+
 	a := &suitConfig{
 		Name:        (*t).Name,
 		CustomIndex: (*t).CustomIndex,
 		Cases:       []ScenarioItem{},
+		// Env:         t.Env,
 	}
 
 	for i := 0; i < len((*t).Cases); i++ {
-		if (*t).Cases[i].GlobalEnv != nil {
-			envs = (*t).Cases[i].GlobalEnv
-		} else {
-			(*t).Cases[i].GlobalEnv = envs
+		if (*t).Env != nil {
+			if (*t).Cases[i].Env == nil {
+				(*t).Cases[i].Env = make(map[string]string)
+			}
+			for key, value := range (*t).Env {
+				if _, exists := (*t).Cases[i].Env[key]; !exists {
+					(*t).Cases[i].Env[key] = value
+				}
+			}
 		}
 
 		if (*t).Cases[i].Workdir != "" {
@@ -562,7 +595,7 @@ func (t *suitConfig) getConf(config string, taskFilter ...string) *suitConfig {
 			if len((*t).Cases[i].Loop.Command) > 0 {
 				s := (*t).Cases[i]
 				s.Script = s.Loop.Command
-				stdout, _ := s.RunBash()
+				stdout, _ := s.RunBash((*t).Env)
 
 				for _, item := range strings.Split(string(stdout), "\n") {
 					if item != "" {
@@ -573,28 +606,29 @@ func (t *suitConfig) getConf(config string, taskFilter ...string) *suitConfig {
 
 			for _, item := range Items {
 				last := len(a.Cases)
-				(*a).Cases = append(a.Cases, (*t).Cases[i])
+				a.Cases = append(a.Cases, t.Cases[i])
 
-				nameHasItemVar := regexp.MustCompile(`\$item`)
-
+				nameHasItemVar := regexp.MustCompile(`\$\{?item\}?`)
 				if len(nameHasItemVar.FindStringSubmatch((*t).Cases[i].Case)) > 0 {
 					(*a).Cases[last].Case = nameHasItemVar.ReplaceAllString((*t).Cases[i].Case, item)
 				} else {
 					(*a).Cases[last].Case = fmt.Sprintf("%s, item => \"%s\"", (*t).Cases[i].Case, item)
 				}
 
-				if (*a).Cases[last].GlobalEnv == nil {
-					(*a).Cases[last].GlobalEnv = make(map[string]string)
+				a.Cases[last].Env = make(map[string]string)
+				for k, v := range t.Cases[i].Env {
+					a.Cases[last].Env[k] = v
 				}
-				(*a).Cases[last].GlobalEnv["item"] = item
+
+				a.Cases[last].Env["item"] = item
 			}
 
 		} else {
-			(*a).Cases = append(a.Cases, (*t).Cases[i])
+			a.Cases = append(a.Cases, t.Cases[i])
 		}
 
 	}
-	*t = *a
+	t = a
 	return t
 }
 
@@ -658,11 +692,11 @@ func jUnitReportSave(reportFile string, c suitConfig) {
 		}
 
 		reportFile, err := os.Create(reportFile)
-		defer reportFile.Close()
 		if err != nil {
 			log.Println(err)
 			return
 		}
+		defer reportFile.Close()
 
 		jut, _ := template.New("junit report").Funcs(funcMap).Parse(string(jUnit.JUnitTemplate))
 		jut.Execute(reportFile, T)
@@ -808,7 +842,7 @@ func main() {
 	flag.Parse()
 
 	if *generateSampleTesCaseFile {
-		log.Println(helper.SampleTestFile)
+		log.Printf(helper.SampleTestFile)
 		os.Exit(0)
 	}
 
@@ -875,6 +909,8 @@ func handleScenarios(c *suitConfig) {
 			if c.Cases[id].CanShow() {
 				c.printTestStatus(id, j+1)
 				j++
+			} else if c.Cases[id].Case == "" {
+				c.printTestStatus(id, j+1)
 			}
 		}
 

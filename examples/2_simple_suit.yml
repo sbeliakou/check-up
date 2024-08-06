@@ -1,28 +1,25 @@
 name: Simple Test 2
 cases:
 
-- script: >
-    docker run -d --name test-server --volume $(pwd):$(pwd) --workdir $(pwd) --privileged quay.io/sbeliakou/ansible-training:centos
+# run container
+- script: docker run -dt --name test-server rockylinux:8.9
 
 - case: Creating test-user in test container
   script: |
-    run docker exec test-server useradd test-user
-    assert_success
+    docker exec test-server useradd test-user
+  debug_script: |
+    docker ps -a | grep test-server
 
 - case: Check if test-user exists
   script: |
-    run docker exec test-server id test-user
-    assert_success
+    docker exec test-server id test-user
 
 # Obviously, it shouldn't, but let's check
-- case: Check if "unwilling-user" exists
+- case: Check if "unwilling-user" doesn't exist
   script: |
-    run docker exec test-server id unwilling-user
-    assert_success
+    docker exec test-server id unwilling-user && exit 1 || exit 0
 
-- case: Creating "unwilling-user"
-  script: |
-    run docker exec test-server id unwilling-user
-    assert_failure
-
-- script: docker rm -f test-server
+# stop container
+- script: |
+    docker stop test-server
+    docker rm -f test-server

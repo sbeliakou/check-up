@@ -1,0 +1,29 @@
+name: Working with Loops
+env: 
+  ZONE1: us-central1-a
+  ZONE2: us-central1-b
+  ZONE3: us-central1-c
+  ZONE4: us-central1-d
+  ZONE5: us-central1-e
+cases:
+- case: Run test case with items from a list
+  script: |
+    env | grep "item=$item"
+  loop:
+    items:
+      - item 1
+      - item 2
+      - item 3
+
+# Runs successfully for ZONE1-ZONE5 and fails for ZONE6
+- case: Check that '${item}' environment variable is set
+  script: |
+    printenv "$item"
+  debug:
+    script: |
+      env | grep ZONE
+  env:
+    ZONE1: us-west1-b
+    ZONE2: us-west1-b
+  loop:
+    command: seq 1 6 | while read R; do echo "ZONE${R}"; done

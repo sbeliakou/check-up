@@ -1,0 +1,32 @@
+name: Working with Environment Variables
+
+# Variables applied to all tasks
+env: 
+  ZONE1: eu-central1-a
+  ZONE2: eu-central1-b
+  ZONE3: eu-central1-c
+  ZONE4: eu-central1-d
+  ZONE5: eu-central1-e
+
+cases:
+- case: Demo using Environment variables
+  script: |
+    env | grep ZONE
+
+  # Variables which will be added to the task execution
+  # In this example task env variables have higher priority than
+  # env variables set above
+  env:
+    ZONE3: us-west1-c
+    ZONE4: us-west1-d
+    ZONE5: us-west1-e
+
+- case: Taking Env Var from Checkup execution shell
+  script: |
+    printenv REGION
+
+  # Variables which will be added to the task execution
+  # In this example, REGION will be set to the value of
+  # AWS_REGION taken from checkup eexecution shell environment
+  env:
+    REGION: "{GLOBAL:AWS_REGION}"

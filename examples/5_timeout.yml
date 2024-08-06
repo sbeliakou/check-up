@@ -1,0 +1,14 @@
+name: Defining Timeout
+cases:
+- case: Long running task gets terminated
+  script: sleep 20
+  timeout: 5 # can be overriden with -t=21 CLI option 
+
+- case: Using Timeout with Debug script
+  script: |
+    command echo doing something
+    exit 1
+  debug:
+    script: |
+      command waiting for logs
+    timeout: 5

@@ -96,11 +96,13 @@ Example - Ensure dependent containers are set up and cleaned up:
 
 # silent task, just for doing some usefull stuff
 - name: provision contianer 2
-  script: docker run --name test -d centos:7 sleep infinity
+  script: docker run --name test2 -d centos:7 sleep infinity
 
 # silent task, just for doing some usefull stuff
 - name: clean up containers
-  script: docker rm -f $(docker ps -q)
+  script: |
+    docker stop test1 && docker rm test1
+    docker stop test2 && docker rm test2
 
 - case: docker run
   script: |
@@ -113,14 +115,21 @@ Example - Ensure dependent containers are set up and cleaned up:
   after:
     - clean up containers
 
-# it creates /tmp/123 folder
-- name: create /tmp/123 folder
-  script: mkdir /tmp/123
+- name: create '/tmp/new_folder' folder
+  script: mkdir -p /tmp/new_folder
 
-- case: check /tmp/123 is created
-  script: test -d /tmp/123
+- name: delete '/tmp/new_folder' folder
+  script: rm -rf /tmp/new_folder
+
+# before running this task checkup runs "before" tasks
+# and after it finishes, it executes "after" tasks
+- case: Validate that '/tmp/new_folder' dir exists
+  script: test -d /tmp/new_folder
   before:
-    - create /tmp/123 folder
+    - create '/tmp/new_folder' folder
+    - create file in '/tmp/new_folder' folder
+  after:
+    - delete '/tmp/new_folder' folder
 ```
 
 ### 2. Execution Time Restrictions
@@ -161,7 +170,7 @@ Example - Verify multiple services:
       ls *.service
 ```
 
-Here, `$item` acts as a variable placeholder for each loop iteration.
+Here, the `$item` acts as a variable placeholder for each loop iteration.
 
 
 ### 4. Skipping Tasks
@@ -222,8 +231,10 @@ Example - Running additional commands when the main task fails:
 - case: check services from a command
   script: |
     systemctl is-active $item
-  debug_script: |
-    journalctl -u $item
+  debug:
+    script: |
+      journalctl -u $item
+    timeout: 10
 ```
 
 Running the checkup tool:

@@ -1,39 +1,29 @@
-name: Using Before and After
+name: Using Before and After Tasks
 cases:
+- name: create '/tmp/new_folder' folder
+  script: mkdir -p /tmp/new_folder
 
-# silent task, just for doing some usefull stuff
-- name: run contianer 1
-  script: docker run --name test1 -d centos:7 sleep infinity
+- name: create file in '/tmp/new_folder' folder
+  script: touch /tmp/new_folder/test_file
 
-# silent task, just for doing some usefull stuff
-- name: run contianer 2
-  script: docker run --name test -d centos:7 sleep infinity
+- name: delete '/tmp/new_folder' folder
+  script: rm -rf /tmp/new_folder
 
-# silent task, just for doing some usefull stuff
-- name: remove containers
-  script: docker rm -f $(docker ps -q)
+# this case should fail
+- case: Validate that '/tmp/new_folder' dir exists
+  script: test -d /tmp/new_folder
 
-- case: check /tmp is created
-  script: test -d /tmp
-
-- case: docker run
-  script: |
-    docker ps
-    docker run --name test -d centos:7 sleep infinity
-  debug_script: |
-    docker ps -a | grep test
+# but this one works fine
+# before running this task checkup runs "before" tasks
+# and after it finishes, it executes "after" tasks
+- case: Validate that '/tmp/new_folder' dir exists
+  script: test -d /tmp/new_folder
   before:
-    - remove containers
-    - run contianer 1
-    - run contianer 2
+    - create '/tmp/new_folder' folder
+    - create file in '/tmp/new_folder' folder
   after:
-    - remove containers
+    - delete '/tmp/new_folder' folder
 
-# it creates /tmp/123 folder, next run it will fail but has no impact on the main task result
-- name: create /tmp/123 foldder
-  script: mkdir /tmp/123
-
-- case: check /tmp/123 is created
-  script: test -d /tmp/123
-  before:
-    - create /tmp/123 foldder
+# this case should fail
+- case: Validate that '/tmp/new_folder/test_file' file exists
+  script: test -f /tmp/new_folder/test_file
