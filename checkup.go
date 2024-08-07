@@ -331,7 +331,12 @@ type taskScriptDetails struct {
 
 func printOut(b string, t []taskScriptDetails, indent ...int) {
 	indentStr := "     "
-	log.Println(indentStr[2:] + b)
+	if len(t) > 0 {
+		log.Println(indentStr[2:] + b)
+	} else {
+		log.Println(indentStr[2:] + b + " not defined\n")
+		return
+	}
 
 	if len(indent) > 0 {
 		indentStr = indentStr + strings.Repeat(" ", indent[0])
@@ -342,16 +347,20 @@ func printOut(b string, t []taskScriptDetails, indent ...int) {
 			log.Printf(indentStr[2:]+"%s", item.Name)
 		}
 
-		log.Println(indentStr + "script: >\n  " + indentStr + regexp.MustCompile(`\n`).ReplaceAllString(item.Script, "\n  "+indentStr))
+		if len(item.Script) > 0 {
+			log.Println(indentStr + "script: |\n  " + indentStr + regexp.MustCompile(`\n`).ReplaceAllString(item.Script, "\n  "+indentStr))
+		}
 
 		if len(item.Stdout) == 0 {
 			log.Println(indentStr + "stdout: \"\" (output is empty)")
 		} else {
-			log.Println(indentStr + "stdout: >\n  " + indentStr + regexp.MustCompile(`\n`).ReplaceAllString(item.Stdout, "\n  "+indentStr))
+			log.Println(indentStr + "stdout: |\n  " + indentStr + regexp.MustCompile(`\n`).ReplaceAllString(item.Stdout, "\n  "+indentStr))
 		}
 
 		if item.Timeout != 0 {
 			log.Printf(indentStr+"timeout: %d sec", item.Timeout)
+		} else {
+			log.Printf(indentStr + "timeout: not defined")
 		}
 
 		exitCodeInt := 0
@@ -379,10 +388,6 @@ func printOut(b string, t []taskScriptDetails, indent ...int) {
 			}
 		}
 
-		log.Println()
-	}
-
-	if len(t) == 0 {
 		log.Println()
 	}
 }
@@ -450,81 +455,76 @@ func (c *suitConfig) printTestStatus(id int, asId ...int) {
 					return
 				}
 
-				if len(testCase.Before) > 0 && (verbosity == 3 || verbosity == 4) {
-					beforeScripts := []taskScriptDetails{}
-					l := len(testCase.Before)
-					for i, name := range testCase.Before {
-						beforeScripts = append(beforeScripts, taskScriptDetails{
-							Name:    fmt.Sprintf("%d/%d: %s", i+1, l, strings.TrimSpace(c.Cases[c.getIdByName(name)].Name)),
-							Script:  strings.TrimSpace(c.Cases[c.getIdByName(name)].Script),
-							Stdout:  strings.TrimSpace(c.Cases[c.getIdByName(name)].stdout),
-							Result:  c.Cases[c.getIdByName(name)].result,
-							Timeout: c.Cases[c.getIdByName(name)].Timeout,
-							Errors:  c.Cases[c.getIdByName(name)].errors,
-						})
-					}
-					printOut(fmt.Sprintf("pre-tasks (%d):", l), beforeScripts, 2)
+				mainScriptLog := []taskScriptDetails{
+					{
+						Script:  strings.TrimSpace(testCase.Script),
+						Stdout:  strings.TrimSpace(testCase.stdout),
+						Result:  testCase.result,
+						Timeout: testCase.Timeout,
+						Env:     testCase.env,
+						Errors:  testCase.errors,
+					},
 				}
 
-				if (verbosity == 1 && testCase.IsFailed()) ||
-					(verbosity == 2) ||
-					(verbosity == 3) ||
-					(verbosity == 4) {
-
-					if (verbosity == 4) && testCase.IsFailed() {
-						printOut("main script:", []taskScriptDetails{
-							{
-								Script:  strings.TrimSpace(testCase.Script),
-								Stdout:  strings.TrimSpace(testCase.stdout),
-								Result:  testCase.result,
-								Timeout: testCase.Timeout,
-								Env:     testCase.env,
-								Errors:  testCase.errors,
-							},
-						})
-					} else {
-						printOut("main script:", []taskScriptDetails{
-							{
-								Script:  strings.TrimSpace(testCase.Script),
-								Stdout:  strings.TrimSpace(testCase.stdout),
-								Result:  testCase.result,
-								Timeout: testCase.Timeout,
-								Errors:  testCase.errors,
-							},
-						})
+				debugScriptLog := []taskScriptDetails{}
+				if len(strings.TrimSpace(testCase.Debug.Script)) > 0 {
+					debugScriptLog = []taskScriptDetails{
+						{
+							Script:  strings.TrimSpace(testCase.Debug.Script),
+							Stdout:  strings.TrimSpace(testCase.Debug.stdout),
+							Result:  testCase.Debug.result,
+							Timeout: testCase.Debug.Timeout,
+							Errors:  testCase.errors,
+						},
 					}
+				}
 
-					if testCase.IsFailed() && (verbosity == 3 || verbosity == 4) {
-						if len(strings.TrimSpace(testCase.Debug.Script)) > 0 {
-							printOut("debug:", []taskScriptDetails{
-								{
-									Script:  strings.TrimSpace(testCase.Debug.Script),
-									Stdout:  strings.TrimSpace(testCase.Debug.stdout),
-									Result:  testCase.Debug.result,
-									Timeout: testCase.Debug.Timeout,
-									Errors:  testCase.errors,
-								},
-							})
-						} else {
-							printOut("debug: script undefined", []taskScriptDetails{})
-						}
-					}
+				beforeScriptsLog := []taskScriptDetails{}
+				for i, name := range testCase.Before {
+					beforeScriptsLog = append(beforeScriptsLog, taskScriptDetails{
+						Name:    fmt.Sprintf("%d/%d: %s", i+1, len(testCase.Before), strings.TrimSpace(c.Cases[c.getIdByName(name)].Name)),
+						Script:  strings.TrimSpace(c.Cases[c.getIdByName(name)].Script),
+						Stdout:  strings.TrimSpace(c.Cases[c.getIdByName(name)].stdout),
+						Result:  c.Cases[c.getIdByName(name)].result,
+						Timeout: c.Cases[c.getIdByName(name)].Timeout,
+						Errors:  c.Cases[c.getIdByName(name)].errors,
+					})
+				}
 
-					if len(testCase.After) > 0 && (verbosity == 3 || verbosity == 4) {
-						afterScript := []taskScriptDetails{}
-						l := len(testCase.After)
-						for i, name := range testCase.After {
-							afterScript = append(afterScript, taskScriptDetails{
-								Name:    fmt.Sprintf("%d/%d: %s", i+1, l, strings.TrimSpace(c.Cases[c.getIdByName(name)].Name)),
-								Script:  strings.TrimSpace(c.Cases[c.getIdByName(name)].Script),
-								Stdout:  strings.TrimSpace(c.Cases[c.getIdByName(name)].stdout),
-								Result:  c.Cases[c.getIdByName(name)].result,
-								Timeout: c.Cases[c.getIdByName(name)].Timeout,
-								Errors:  c.Cases[c.getIdByName(name)].errors,
-							})
-						}
-						printOut(fmt.Sprintf("post-tasks (%d):", l), afterScript, 2)
+				afterScriptsLog := []taskScriptDetails{}
+				for i, name := range testCase.After {
+					afterScriptsLog = append(afterScriptsLog, taskScriptDetails{
+						Name:    fmt.Sprintf("%d/%d: %s", i+1, len(testCase.After), strings.TrimSpace(c.Cases[c.getIdByName(name)].Name)),
+						Script:  strings.TrimSpace(c.Cases[c.getIdByName(name)].Script),
+						Stdout:  strings.TrimSpace(c.Cases[c.getIdByName(name)].stdout),
+						Result:  c.Cases[c.getIdByName(name)].result,
+						Timeout: c.Cases[c.getIdByName(name)].Timeout,
+						Errors:  c.Cases[c.getIdByName(name)].errors,
+					})
+				}
+
+				switch verbosity {
+				case 1:
+					if testCase.IsFailed() {
+						printOut("case task:", mainScriptLog)
 					}
+				case 2:
+					if testCase.IsFailed() {
+						printOut("case task:", mainScriptLog)
+						printOut("debug:", debugScriptLog)
+					}
+				case 3:
+					if testCase.IsFailed() {
+						printOut(fmt.Sprintf("pre-tasks (%d):", len(beforeScriptsLog)), beforeScriptsLog, 2)
+						printOut("case task:", mainScriptLog)
+						printOut("debug:", debugScriptLog)
+						printOut(fmt.Sprintf("post-tasks (%d):", len(afterScriptsLog)), afterScriptsLog, 2)
+					}
+				case 4:
+					printOut(fmt.Sprintf("pre-tasks (%d):", len(beforeScriptsLog)), beforeScriptsLog, 2)
+					printOut("case task:", mainScriptLog)
+					printOut("debug:", debugScriptLog)
+					printOut(fmt.Sprintf("post-tasks (%d):", len(afterScriptsLog)), afterScriptsLog, 2)
 				}
 			}
 			return
@@ -591,8 +591,13 @@ func (t *suitConfig) getConf(config string, taskFilter ...string) *suitConfig {
 			scanner := bufio.NewScanner(file)
 			for scanner.Scan() {
 				line := scanner.Text()
-				key := strings.Split(line, "=")[0]
-				value := strings.Split(line, "=")[1]
+
+				parts := strings.SplitN(line, "=", 2)
+				if len(parts) != 2 {
+					continue
+				}
+
+				key, value := parts[0], parts[1]
 
 				if t.Env == nil {
 					t.Env = make(map[string]string)
@@ -891,6 +896,7 @@ func listFiles(path string) []string {
 
 func main() {
 	log.SetFlags(0)
+	log.SetOutput(os.Stdout)
 
 	// Modified Args slice
 	args := os.Args[:1] // keep the program name
