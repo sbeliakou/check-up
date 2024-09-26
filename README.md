@@ -316,11 +316,10 @@ And the output changes accordingly:
 - `--version` - Show current version
 - `-v`, `--verbosity` - Set the verbosity level to control the amount and type of output:  
     - `-v=0`, `--verbosity=0`: Standard output. Provides essential information without additional details.
-    - `-v=1`, `--verbosity=1`: Detailed output. Shows comprehensive details about the execution of tasks that fail.
-            
-    - `-v=2`, `--verbosity=2`: Enhanced Detailed output. Provides comprehensive details on the execution of all tasks, whether successful or failed.
-    - `-v=3`, `--verbosity=3`: Full Detailed output. Shows exhaustive details about the execution of all tasks, including any associated pre-task and post-task activities. Additionally, for failed tasks, it includes detailed debug information.
-    - `-v=4`, `--verbosity=4`: Debug-Level Detailed output. This level includes all details provided at level 3, plus it displays environment variables specifically for the tasks that fail.
+    - `-v=1`, `--verbosity=1`: Shows details about the execution of tasks that fail.
+    - `-v=2`, `--verbosity=2`: Enhanced Detailed output. Provides comprehensive details on the execution of failed tasks. Additionally, for failed tasks, it includes detailed debug information.
+    - `-v=3`, `--verbosity=3`: Full Detailed output for failed tasks. Shows exhaustive details about the execution of failed tasks, including any associated pre-task and post-task activities.
+    - `-v=4`, `--verbosity=4`: Debug-Level Detailed output. This level displays the details of the execution of all tasks (successful and failed).
 
 
 ## License
